@@ -620,10 +620,17 @@ pub enum SettingsSection {
     Sound,
     Toast,
     PaneLabels,
+    Integrations,
 }
 
 impl SettingsSection {
-    pub const ALL: &[Self] = &[Self::Theme, Self::Sound, Self::Toast, Self::PaneLabels];
+    pub const ALL: &[Self] = &[
+        Self::Theme,
+        Self::Sound,
+        Self::Toast,
+        Self::PaneLabels,
+        Self::Integrations,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -631,6 +638,7 @@ impl SettingsSection {
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
+            Self::Integrations => "integrations",
         }
     }
 }
@@ -972,6 +980,10 @@ pub struct AppState {
     pub theme_name: String,
     /// Settings panel state.
     pub settings: SettingsState,
+    /// Cached integration recommendations for onboarding/settings UI.
+    pub integration_recommendations: Vec<crate::integration::IntegrationRecommendation>,
+    /// Result messages from the latest integration install action.
+    pub integration_install_messages: Vec<String>,
     /// Highlight state for the bottom-right global launcher menu.
     pub global_menu: MenuListState,
     /// Resolved host terminal default colors for theming embedded panes.
@@ -1279,6 +1291,8 @@ impl AppState {
                 original_palette: None,
                 original_theme: None,
             },
+            integration_recommendations: Vec::new(),
+            integration_install_messages: Vec::new(),
             global_menu: MenuListState::new(0),
             host_terminal_theme: TerminalTheme::default(),
             session_dirty: false,

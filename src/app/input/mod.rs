@@ -37,7 +37,7 @@ pub(crate) use self::{
         handle_keybind_help_key, handle_rename_key, handle_resize_key,
     },
     navigate::terminal_direct_navigation_action,
-    settings::open_settings,
+    settings::open_settings_at,
 };
 use self::{
     modal::{
@@ -181,6 +181,7 @@ impl App {
         }
 
         let previous_agent_panel_scope = self.state.agent_panel_scope;
+        let previous_settings_section = self.state.settings.section;
         if let Some(action) = self.state.handle_mouse(mouse) {
             match action {
                 SettingsAction::SaveTheme(name) => self.save_theme(&name),
@@ -189,7 +190,15 @@ impl App {
                 SettingsAction::SaveAgentBorderLabels(enabled) => {
                     self.save_agent_border_labels(enabled)
                 }
+                SettingsAction::InstallRecommendedIntegrations => {
+                    self.install_recommended_integrations()
+                }
             }
+        }
+        if previous_settings_section != crate::app::state::SettingsSection::Integrations
+            && self.state.settings.section == crate::app::state::SettingsSection::Integrations
+        {
+            self.refresh_integration_recommendations();
         }
         if self.state.agent_panel_scope != previous_agent_panel_scope {
             self.save_agent_panel_scope(self.state.agent_panel_scope);

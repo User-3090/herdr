@@ -118,22 +118,30 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 app.settings.list.selected,
             );
         }
+        SettingsSection::Integrations => {
+            render_settings_integrations(app, frame, content_area);
+        }
     }
 
     if let Some(footer_area) = stack.footer {
         let footer_rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
             .areas::<2>(footer_area);
-        let (apply_rect, close_rect) = settings_button_rects(inner);
-        render_action_button(
-            frame,
-            apply_rect,
-            Some("↵"),
-            "apply",
-            Style::default()
-                .fg(panel_contrast_fg(p))
-                .bg(p.accent)
-                .add_modifier(Modifier::BOLD),
-        );
+        let primary_label = settings_primary_button_label(app.settings.section);
+        let show_primary = settings_show_primary_action(app);
+        let (apply_rect, close_rect) =
+            settings_button_rects(inner, app.settings.section, show_primary);
+        if let Some(apply_rect) = apply_rect {
+            render_action_button(
+                frame,
+                apply_rect,
+                Some("↵"),
+                primary_label,
+                Style::default()
+                    .fg(panel_contrast_fg(p))
+                    .bg(p.accent)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
         render_action_button(
             frame,
             close_rect,
@@ -157,13 +165,47 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
     }
 }
 
-pub(crate) fn settings_button_rects(inner: Rect) -> (Rect, Rect) {
+pub(crate) fn settings_primary_button_label(
+    section: crate::app::state::SettingsSection,
+) -> &'static str {
+    match section {
+        crate::app::state::SettingsSection::Integrations => "install",
+        _ => "apply",
+    }
+}
+
+pub(crate) fn settings_show_primary_action(app: &AppState) -> bool {
+    app.settings.section != crate::app::state::SettingsSection::Integrations
+        || app
+            .integration_recommendations
+            .iter()
+            .any(crate::integration::IntegrationRecommendation::needs_install)
+}
+
+pub(crate) fn settings_button_rects(
+    inner: Rect,
+    section: crate::app::state::SettingsSection,
+    show_primary: bool,
+) -> (Option<Rect>, Rect) {
+    if !show_primary {
+        let rects = action_button_row_rects(
+            inner,
+            &[ActionButtonSpec {
+                hint: Some("esc"),
+                label: "close",
+            }],
+            2,
+            inner.height.saturating_sub(1),
+        );
+        return (None, rects[0]);
+    }
+
     let rects = action_button_row_rects(
         inner,
         &[
             ActionButtonSpec {
                 hint: Some("↵"),
-                label: "apply",
+                label: settings_primary_button_label(section),
             },
             ActionButtonSpec {
                 hint: Some("esc"),
@@ -173,7 +215,99 @@ pub(crate) fn settings_button_rects(inner: Rect) -> (Rect, Rect) {
         2,
         inner.height.saturating_sub(1),
     );
-    (rects[0], rects[1])
+    (Some(rects[0]), rects[1])
+}
+
+fn render_settings_integrations(app: &AppState, frame: &mut Frame, area: Rect) {
+    let p = &app.palette;
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas::<4>(area);
+
+    frame.render_widget(
+        Paragraph::new("agent integrations")
+            .style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(
+            "let agents report state directly instead of relying only on process detection",
+        )
+        .style(Style::default().fg(p.overlay1))
+        .wrap(ratatui::widgets::Wrap { trim: false }),
+        rows[1],
+    );
+
+    let mut lines = Vec::new();
+    for item in &app.integration_recommendations {
+        let marker = match item.state {
+            crate::integration::IntegrationStatusKind::Current => "✓",
+            crate::integration::IntegrationStatusKind::Outdated => "↻",
+            crate::integration::IntegrationStatusKind::NotInstalled if item.available => "+",
+            crate::integration::IntegrationStatusKind::NotInstalled => "–",
+        };
+        let marker_style = match item.state {
+            crate::integration::IntegrationStatusKind::Current => Style::default().fg(p.green),
+            crate::integration::IntegrationStatusKind::Outdated => Style::default().fg(p.yellow),
+            crate::integration::IntegrationStatusKind::NotInstalled if item.available => {
+                Style::default().fg(p.accent)
+            }
+            crate::integration::IntegrationStatusKind::NotInstalled => {
+                Style::default().fg(p.overlay0)
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker} "), marker_style),
+            Span::styled(
+                format!("{:<9}", item.label),
+                Style::default().fg(p.subtext0),
+            ),
+            Span::styled(item.status_label(), Style::default().fg(p.overlay1)),
+        ]));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " no integration targets available",
+            Style::default().fg(p.overlay1),
+        )));
+    }
+
+    if !app.integration_install_messages.is_empty() {
+        lines.push(Line::from(""));
+        for message in &app.integration_install_messages {
+            lines.push(Line::from(Span::styled(
+                format!(" {message}"),
+                Style::default().fg(p.overlay1),
+            )));
+        }
+    } else {
+        lines.push(Line::from(""));
+        let found_any = app.integration_recommendations.iter().any(|item| {
+            item.available || item.state != crate::integration::IntegrationStatusKind::NotInstalled
+        });
+        let hint = if app
+            .integration_recommendations
+            .iter()
+            .any(crate::integration::IntegrationRecommendation::needs_install)
+        {
+            " press install to add available or outdated integrations"
+        } else if found_any {
+            " all detected integrations are installed"
+        } else {
+            " no supported agent CLIs found on PATH"
+        };
+        lines.push(Line::from(Span::styled(
+            hint,
+            Style::default().fg(p.overlay1),
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(lines), rows[3]);
 }
 
 fn render_settings_theme(app: &AppState, frame: &mut Frame, area: Rect) {

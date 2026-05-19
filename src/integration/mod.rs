@@ -73,6 +73,32 @@ pub(crate) enum IntegrationStatusKind {
     Outdated,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IntegrationRecommendation {
+    pub target: crate::api::schema::IntegrationTarget,
+    pub label: &'static str,
+    pub command: &'static str,
+    pub available: bool,
+    pub path: PathBuf,
+    pub state: IntegrationStatusKind,
+}
+
+impl IntegrationRecommendation {
+    pub fn needs_install(&self) -> bool {
+        self.state == IntegrationStatusKind::Outdated
+            || (self.available && self.state == IntegrationStatusKind::NotInstalled)
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        match (self.available, self.state) {
+            (_, IntegrationStatusKind::Current) => "installed",
+            (_, IntegrationStatusKind::Outdated) => "update available",
+            (true, IntegrationStatusKind::NotInstalled) => "available",
+            (false, IntegrationStatusKind::NotInstalled) => "not found",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PiUninstallResult {
     pub extension_path: PathBuf,
@@ -311,11 +337,71 @@ pub(crate) fn integration_target_label(
     }
 }
 
+fn integration_target_command(target: crate::api::schema::IntegrationTarget) -> &'static str {
+    match target {
+        crate::api::schema::IntegrationTarget::Pi => "pi",
+        crate::api::schema::IntegrationTarget::Claude => "claude",
+        crate::api::schema::IntegrationTarget::Codex => "codex",
+        crate::api::schema::IntegrationTarget::Opencode => "opencode",
+        crate::api::schema::IntegrationTarget::Hermes => "hermes",
+    }
+}
+
+fn integration_target_available(target: crate::api::schema::IntegrationTarget) -> bool {
+    command_available(integration_target_command(target))
+}
+
+fn command_available(command: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| executable_file_exists(&dir.join(command)))
+}
+
+fn executable_file_exists(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 pub(crate) fn installed_integration_statuses() -> Vec<IntegrationStatus> {
     integration_specs()
         .into_iter()
         .filter_map(|(target, path, expected_version)| {
             Some(integration_status_at(target, path.ok()?, expected_version))
+        })
+        .collect()
+}
+
+pub(crate) fn integration_recommendations() -> Vec<IntegrationRecommendation> {
+    integration_specs()
+        .into_iter()
+        .filter_map(|(target, path, expected_version)| {
+            let path = path.ok()?;
+            let status = integration_status_at(target, path.clone(), expected_version);
+            Some(IntegrationRecommendation {
+                target,
+                label: integration_target_label(target),
+                command: integration_target_command(target),
+                available: integration_target_available(target)
+                    || status.state != IntegrationStatusKind::NotInstalled,
+                path,
+                state: status.state,
+            })
         })
         .collect()
 }
@@ -1360,6 +1446,58 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn command_available_requires_executable_file_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = integration_env_lock();
+        let base = unique_base();
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+
+        let command = bin.join("claude");
+        fs::write(&command, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!command_available("claude"));
+
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(command_available("claude"));
+
+        if let Some(path) = original_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn integration_recommendation_installs_available_or_outdated_targets() {
+        let mut recommendation = IntegrationRecommendation {
+            target: crate::api::schema::IntegrationTarget::Claude,
+            label: "claude",
+            command: "claude",
+            available: false,
+            path: PathBuf::from("/tmp/herdr-agent-state.sh"),
+            state: IntegrationStatusKind::NotInstalled,
+        };
+        assert!(!recommendation.needs_install());
+
+        recommendation.available = true;
+        assert!(recommendation.needs_install());
+
+        recommendation.available = false;
+        recommendation.state = IntegrationStatusKind::Outdated;
+        assert!(recommendation.needs_install());
+
+        recommendation.available = true;
+        recommendation.state = IntegrationStatusKind::Current;
+        assert!(!recommendation.needs_install());
     }
 
     #[test]

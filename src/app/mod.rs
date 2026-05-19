@@ -439,6 +439,8 @@ impl App {
                 original_palette: None,
                 original_theme: None,
             },
+            integration_recommendations: crate::integration::integration_recommendations(),
+            integration_install_messages: Vec::new(),
             global_menu: state::MenuListState::new(0),
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             session_dirty: false,
@@ -735,7 +737,47 @@ impl App {
 
     pub(crate) fn open_settings_from_onboarding(&mut self) {
         self.mark_onboarding_complete();
-        crate::app::input::open_settings(&mut self.state);
+        self.refresh_integration_recommendations();
+        crate::app::input::open_settings_at(&mut self.state, state::SettingsSection::Integrations);
+    }
+
+    pub(crate) fn refresh_integration_recommendations(&mut self) {
+        self.state.integration_recommendations = crate::integration::integration_recommendations();
+    }
+
+    pub(crate) fn install_recommended_integrations(&mut self) {
+        let targets = self
+            .state
+            .integration_recommendations
+            .iter()
+            .filter(|recommendation| recommendation.needs_install())
+            .map(|recommendation| recommendation.target)
+            .collect::<Vec<_>>();
+
+        self.state.integration_install_messages.clear();
+        if targets.is_empty() {
+            self.state
+                .integration_install_messages
+                .push("all detected integrations are current".to_string());
+            return;
+        }
+
+        for target in targets {
+            let label = crate::integration::integration_target_label(target);
+            match crate::integration::install_target(target) {
+                Ok(_) => self
+                    .state
+                    .integration_install_messages
+                    .push(format!("installed {label}")),
+                Err(err) => self
+                    .state
+                    .integration_install_messages
+                    .push(format!("{label}: {err}")),
+            }
+        }
+
+        self.state.integration_recommendations = crate::integration::integration_recommendations();
+        self.state.mark_session_dirty();
     }
 
     pub(crate) fn reload_config(&mut self) -> crate::config::ConfigReloadReport {
@@ -2618,6 +2660,10 @@ mod tests {
         app.route_client_input(b"\r".to_vec());
 
         assert_eq!(app.state.mode, Mode::Settings);
+        assert_eq!(
+            app.state.settings.section,
+            state::SettingsSection::Integrations
+        );
     }
 
     #[test]

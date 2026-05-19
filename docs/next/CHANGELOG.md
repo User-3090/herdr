@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Added an integrations tab in settings and first-run onboarding so users can install recommended agent integrations from inside Herdr.
+
 ## [0.5.12] - 2026-05-19
 
 ### Fixed
