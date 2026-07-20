@@ -32,16 +32,16 @@ try {
     Expand-Archive -LiteralPath $zipPath -DestinationPath $expandedPath
 
     $dll = Join-Path $expandedPath "runtimes\win-$Architecture\native\conpty.dll"
-    $host = Join-Path $expandedPath "build\native\runtimes\$Architecture\OpenConsole.exe"
+    $consoleHost = Join-Path $expandedPath "build\native\runtimes\$Architecture\OpenConsole.exe"
     if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
         throw "ConPTY package does not contain the expected DLL: $dll"
     }
-    if (-not (Test-Path -LiteralPath $host -PathType Leaf)) {
-        throw "ConPTY package does not contain the expected console host: $host"
+    if (-not (Test-Path -LiteralPath $consoleHost -PathType Leaf)) {
+        throw "ConPTY package does not contain the expected console host: $consoleHost"
     }
 
     Copy-Item -LiteralPath $dll -Destination (Join-Path $destinationPath "conpty.dll") -Force
-    Copy-Item -LiteralPath $host -Destination (Join-Path $destinationPath "OpenConsole.exe") -Force
+    Copy-Item -LiteralPath $consoleHost -Destination (Join-Path $destinationPath "OpenConsole.exe") -Force
 
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $license = Join-Path $repoRoot "vendor\licenses\Microsoft.Windows.Console.ConPTY.LICENSE.txt"
