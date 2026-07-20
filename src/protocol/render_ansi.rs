@@ -140,10 +140,61 @@ pub(crate) fn frame_with_drawn_cursor(mut frame: FrameData) -> FrameData {
             .saturating_mul(frame.width as usize)
             .saturating_add(x as usize);
         if let Some(cell) = frame.cells.get_mut(idx) {
-            cell.modifier ^= REVERSED_MODIFIER;
+            if let Some((foreground, background)) = drawn_cursor_colors(cell) {
+                cell.fg = foreground;
+                cell.bg = background;
+                cell.modifier &= !REVERSED_MODIFIER;
+            } else {
+                cell.modifier ^= REVERSED_MODIFIER;
+            }
         }
     }
     frame
+}
+
+fn drawn_cursor_colors(cell: &CellData) -> Option<(u32, u32)> {
+    let effective_background = if cell.modifier & REVERSED_MODIFIER != 0 {
+        cell.fg
+    } else {
+        cell.bg
+    };
+    let (r, g, b) = packed_color_rgb(effective_background)?;
+    let luminance = u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114;
+    if luminance >= 128_000 {
+        Some((0x00_00_00_10, 0x00_00_00_01))
+    } else {
+        Some((0x00_00_00_01, 0x00_00_00_10))
+    }
+}
+
+fn packed_color_rgb(value: u32) -> Option<(u8, u8, u8)> {
+    match value >> 24 {
+        0x00 => match value & 0xff {
+            0x01 => Some((0, 0, 0)),
+            0x02 => Some((128, 0, 0)),
+            0x03 => Some((0, 128, 0)),
+            0x04 => Some((128, 128, 0)),
+            0x05 => Some((0, 0, 128)),
+            0x06 => Some((128, 0, 128)),
+            0x07 => Some((0, 128, 128)),
+            0x08 => Some((192, 192, 192)),
+            0x09 => Some((128, 128, 128)),
+            0x0a => Some((255, 0, 0)),
+            0x0b => Some((0, 255, 0)),
+            0x0c => Some((255, 255, 0)),
+            0x0d => Some((0, 0, 255)),
+            0x0e => Some((255, 0, 255)),
+            0x0f => Some((0, 255, 255)),
+            0x10 => Some((255, 255, 255)),
+            _ => None,
+        },
+        0x02 => Some((
+            ((value >> 16) & 0xff) as u8,
+            ((value >> 8) & 0xff) as u8,
+            (value & 0xff) as u8,
+        )),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1173,6 +1224,52 @@ mod tests {
             output_str.contains("\x1b[0;7;39;49mA"),
             "drawn cursor should be emitted as reverse-video cell content"
         );
+    }
+
+    #[test]
+    fn drawn_cursor_uses_black_block_on_light_background() {
+        let frame = FrameData {
+            cells: vec![make_cell(" ", 0, 0x02_f0_f0_f0, 0)],
+            width: 1,
+            height: 1,
+            cursor: Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 2,
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let drawn = frame_with_drawn_cursor(frame);
+
+        assert_eq!(drawn.cells[0].fg, 0x00_00_00_10);
+        assert_eq!(drawn.cells[0].bg, 0x00_00_00_01);
+        assert_eq!(drawn.cells[0].modifier & REVERSED_MODIFIER, 0);
+    }
+
+    #[test]
+    fn drawn_cursor_uses_white_block_on_dark_background() {
+        let frame = FrameData {
+            cells: vec![make_cell(" ", 0, 0x02_10_10_10, 0)],
+            width: 1,
+            height: 1,
+            cursor: Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 2,
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let drawn = frame_with_drawn_cursor(frame);
+
+        assert_eq!(drawn.cells[0].fg, 0x00_00_00_01);
+        assert_eq!(drawn.cells[0].bg, 0x00_00_00_10);
+        assert_eq!(drawn.cells[0].modifier & REVERSED_MODIFIER, 0);
     }
 
     #[test]
