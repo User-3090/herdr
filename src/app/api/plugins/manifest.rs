@@ -292,12 +292,7 @@ pub(super) fn normalize_plugin_source(
     let plugin_root = std::path::PathBuf::from(&plugin.plugin_root)
         .canonicalize()
         .map_err(|err| ("invalid_plugin_source", err.to_string()))?;
-    let expected = crate::session::data_dir()
-        .join("plugins")
-        .join("github")
-        .join(crate::api::schema::plugin_managed_path_component(
-            &plugin.plugin_id,
-        ))
+    let expected = crate::plugin_paths::managed_checkout_path(&plugin.plugin_id)
         .canonicalize()
         .map_err(|err| ("invalid_plugin_source", err.to_string()))?;
     if managed_path != expected {

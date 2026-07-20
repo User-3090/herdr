@@ -220,6 +220,10 @@ impl App {
         if !crate::api::schema::PLUGIN_HOOK_EVENT_KINDS.contains(&event.event) {
             return;
         }
+        if let Err(err) = self.refresh_installed_plugins() {
+            tracing::warn!(err = %err, "failed to refresh plugin registry before event hooks");
+            return;
+        }
         let plugins = self
             .state
             .installed_plugins

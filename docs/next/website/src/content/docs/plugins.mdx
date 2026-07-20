@@ -194,6 +194,10 @@ herdr plugin log list --plugin example.layout
 terminals, runs supported build commands, then stores the checkout under
 Herdr-managed plugin data and registers it. Use `--yes` for noninteractive
 installs. Reinstalling a GitHub-managed plugin replaces that managed checkout.
+Installed and linked plugins, including their enabled state, are global to the
+current user and available in every Herdr session. Plugins installed only in a
+named session on Herdr 0.7.3 must be installed or linked again. Existing plugin
+config and state remain in place.
 Installing over a locally linked plugin is refused; unlink or uninstall the
 local plugin first. `plugin install` and `plugin link` create the plugin's
 config and state directories, and `plugin config-dir <id>` prints the config

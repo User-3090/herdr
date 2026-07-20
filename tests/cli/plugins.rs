@@ -1,6 +1,195 @@
 use super::harness::*;
 
 #[test]
+fn named_sessions_share_live_plugin_registry() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let first_dir = base.join("plugins").join("first");
+    let second_dir = base.join("plugins").join("second");
+    for (dir, id) in [
+        (&first_dir, "example.first"),
+        (&second_dir, "example.second"),
+    ] {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join("herdr-plugin.toml"),
+            format!(
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n\n[[actions]]\nid = \"run\"\ntitle = \"Run\"\ncommand = [\"sh\", \"-c\", \"echo run\"]\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    let alpha = spawn_named_server(&config_home, &runtime_dir, "alpha");
+    let beta = spawn_named_server(&config_home, &runtime_dir, "beta");
+    wait_for_socket(
+        &named_session_socket(&config_home, "alpha"),
+        Duration::from_secs(5),
+    );
+    wait_for_socket(
+        &named_session_socket(&config_home, "beta"),
+        Duration::from_secs(5),
+    );
+
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            run_named_cli_json(
+                &config_home,
+                &runtime_dir,
+                &[
+                    "--session",
+                    "alpha",
+                    "plugin",
+                    "link",
+                    first_dir.to_str().unwrap(),
+                ],
+            )
+        });
+        let second = scope.spawn(|| {
+            run_named_cli_json(
+                &config_home,
+                &runtime_dir,
+                &[
+                    "--session",
+                    "beta",
+                    "plugin",
+                    "link",
+                    second_dir.to_str().unwrap(),
+                ],
+            )
+        });
+        assert_eq!(
+            first.join().unwrap()["result"]["plugin"]["plugin_id"],
+            "example.first"
+        );
+        assert_eq!(
+            second.join().unwrap()["result"]["plugin"]["plugin_id"],
+            "example.second"
+        );
+    });
+
+    let beta_list = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "beta", "plugin", "list", "--json"],
+    );
+    assert_eq!(beta_list["result"]["plugins"].as_array().unwrap().len(), 2);
+
+    run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "beta", "plugin", "disable", "example.first"],
+    );
+    let disabled = run_named_cli(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "alpha",
+            "plugin",
+            "action",
+            "invoke",
+            "run",
+            "--plugin",
+            "example.first",
+        ],
+    );
+    assert_eq!(disabled.status.code(), Some(1));
+    let disabled_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&disabled.stdout),
+        String::from_utf8_lossy(&disabled.stderr)
+    );
+    assert!(disabled_output.contains("disabled"), "{disabled_output}");
+
+    let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", "alpha"]);
+    let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", "beta"]);
+    drop(alpha);
+    drop(beta);
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn plugin_install_through_named_server_is_global() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let source_repo = base.join("source-repo");
+    let plugin_dir = source_repo.join("global-plugin");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    create_committed_repo(&source_repo);
+    fs::write(
+        plugin_dir.join("herdr-plugin.toml"),
+        r#"
+id = "example.global-plugin"
+name = "Global Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos", "windows"]
+"#,
+    )
+    .unwrap();
+    run_git(&source_repo, &["add", "global-plugin/herdr-plugin.toml"]);
+    run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
+
+    let git_config = base.join("gitconfig");
+    fs::write(
+        &git_config,
+        format!(
+            "[url \"file://{}\"]\n    insteadOf = https://github.com/example/plugins.git\n",
+            source_repo.display()
+        ),
+    )
+    .unwrap();
+
+    let alpha = spawn_named_server(&config_home, &runtime_dir, "alpha");
+    wait_for_socket(
+        &named_session_socket(&config_home, "alpha"),
+        Duration::from_secs(5),
+    );
+    let install = run_named_cli_with_env(
+        &config_home,
+        &runtime_dir,
+        &[
+            "--session",
+            "alpha",
+            "plugin",
+            "install",
+            "example/plugins/global-plugin",
+            "--yes",
+        ],
+        &[("GIT_CONFIG_GLOBAL", &git_config)],
+    );
+    assert!(
+        install.status.success(),
+        "install failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&install.stdout),
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let beta_list = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "beta", "plugin", "list", "--json"],
+    );
+    assert_eq!(
+        beta_list["result"]["plugins"][0]["plugin_id"],
+        "example.global-plugin"
+    );
+    let managed_path = PathBuf::from(
+        beta_list["result"]["plugins"][0]["source"]["managed_path"]
+            .as_str()
+            .unwrap(),
+    );
+    assert!(managed_path.starts_with(managed_github_plugin_dir(&config_home)));
+
+    let _ = run_named_cli(&config_home, &runtime_dir, &["session", "stop", "alpha"]);
+    drop(alpha);
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn plugin_link_list_unlink_cli_smoke_test() {
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -212,7 +401,7 @@ command = ["sh", "-c", "echo bootstrap"]
     let listed = run_named_cli_json(
         &config_home,
         &runtime_dir,
-        &["--session", "plugins", "plugin", "list", "--json"],
+        &["--session", "other", "plugin", "list", "--json"],
     );
     let plugin = &listed["result"]["plugins"][0];
     assert_eq!(plugin["plugin_id"], "example.worktree-bootstrap");
@@ -223,6 +412,7 @@ command = ["sh", "-c", "echo bootstrap"]
     assert!(plugin["source"]["resolved_commit"].as_str().is_some());
     let managed_path = PathBuf::from(plugin["source"]["managed_path"].as_str().unwrap());
     assert!(managed_path.exists(), "managed checkout should exist");
+    assert!(managed_path.starts_with(managed_github_plugin_dir(&config_home)));
     assert!(
         managed_path
             .join("worktree-bootstrap")
@@ -243,7 +433,7 @@ command = ["sh", "-c", "echo bootstrap"]
         &runtime_dir,
         &[
             "--session",
-            "plugins",
+            "third",
             "plugin",
             "uninstall",
             "example.worktree-bootstrap",
@@ -263,7 +453,7 @@ command = ["sh", "-c", "echo bootstrap"]
     let listed = run_named_cli_json(
         &config_home,
         &runtime_dir,
-        &["--session", "plugins", "plugin", "list", "--json"],
+        &["--session", "other", "plugin", "list", "--json"],
     );
     assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
 
