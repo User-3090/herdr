@@ -15,9 +15,10 @@ pub(super) fn raw_console_reader_loop(
     handle: windows_sys::Win32::Foundation::HANDLE,
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
+    host_color_query_sent: bool,
 ) {
     let mut mapper = WindowsInputMapper::default();
-    let mut pump = WindowsInputPump::default();
+    let mut pump = WindowsInputPump::for_host_input(host_color_query_sent);
 
     while !should_quit.load(Ordering::Acquire) {
         match windows_console_input_items(handle, &mut mapper) {
@@ -198,8 +199,14 @@ struct WindowsInputPump {
 
 impl Default for WindowsInputPump {
     fn default() -> Self {
+        Self::for_host_input(false)
+    }
+}
+
+impl WindowsInputPump {
+    fn for_host_input(host_color_query_sent: bool) -> Self {
         Self {
-            framer: crate::raw_input::RawInputFramer::for_host_input(),
+            framer: super::windows_host_input_framer(host_color_query_sent),
             paste_from_win32_key_records: false,
         }
     }
@@ -1171,6 +1178,40 @@ mod tests {
             vec![crate::protocol::ClientInputEvent::Paste {
                 text: "alpha\rbravo\rcharlie".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn vti_host_color_replies_emit_semantic_theme_events() {
+        let mut translator = WindowsInputTranslator {
+            pump: WindowsInputPump::for_host_input(true),
+            ..WindowsInputTranslator::default()
+        };
+        let events = "\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\"
+            .chars()
+            .flat_map(|ch| translator.translate(key_char(ch)))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            events,
+            vec![
+                crate::protocol::ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Foreground,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0xff,
+                        g: 0xee,
+                        b: 0xdd,
+                    },
+                },
+                crate::protocol::ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Background,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                    },
+                },
+            ]
         );
     }
 

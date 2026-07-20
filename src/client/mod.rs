@@ -365,7 +365,7 @@ fn setup_terminal_with_capabilities(
         }
         push_keyboard_enhancement_flags()?;
     } else {
-        if should_query_host_terminal_theme() {
+        if host_color_scheme_reports_supported() {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
         }
         if mouse_capture {
@@ -416,7 +416,11 @@ fn setup_terminal_with_capabilities(
 }
 
 fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> bool {
-    enable_client_protocols && should_query_host_terminal_theme()
+    enable_client_protocols && host_color_scheme_reports_supported()
+}
+
+fn host_color_scheme_reports_supported() -> bool {
+    !cfg!(windows)
 }
 
 /// Guard that restores the terminal when dropped.
@@ -1488,6 +1492,9 @@ async fn run_client_loop(
                 ) {
                     state.request_full_redraw();
                 }
+                if crate::raw_input::events_require_host_terminal_theme_query(&raw_events) {
+                    query_host_terminal_theme();
+                }
                 let msg = ClientMessage::InputEvents { events };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
@@ -2118,7 +2125,7 @@ fn query_host_terminal_theme() {
 }
 
 fn should_query_host_terminal_theme() -> bool {
-    !cfg!(windows)
+    true
 }
 
 fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()> {
@@ -2429,8 +2436,8 @@ mod tests {
     }
 
     #[test]
-    fn host_terminal_theme_query_is_disabled_on_windows() {
-        assert_eq!(should_query_host_terminal_theme(), !cfg!(windows));
+    fn host_terminal_theme_query_is_enabled_on_all_platforms() {
+        assert!(should_query_host_terminal_theme());
     }
 
     #[test]

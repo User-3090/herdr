@@ -127,6 +127,11 @@ pub enum ClientInputEvent {
     },
     FocusGained,
     FocusLost,
+    HostDefaultColor {
+        kind: crate::terminal_theme::DefaultColorKind,
+        color: crate::terminal_theme::RgbColor,
+    },
+    HostColorSchemeChanged(crate::terminal_theme::HostAppearance),
 }
 
 impl ClientKeyKind {
@@ -299,6 +304,15 @@ impl ClientInputEvent {
             Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
             Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
             Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
+            Self::HostDefaultColor { kind, color } => {
+                crate::raw_input::RawInputEvent::HostDefaultColor {
+                    kind: *kind,
+                    color: *color,
+                }
+            }
+            Self::HostColorSchemeChanged(appearance) => {
+                crate::raw_input::RawInputEvent::HostColorSchemeChanged(*appearance)
+            }
         }
     }
 }
@@ -1065,6 +1079,17 @@ mod tests {
                     row: 4,
                     modifiers: 0,
                 },
+                ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Background,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                    },
+                },
+                ClientInputEvent::HostColorSchemeChanged(
+                    crate::terminal_theme::HostAppearance::Dark,
+                ),
             ],
         };
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
@@ -1104,6 +1129,23 @@ mod tests {
             }
             other => panic!("expected backspace key event, got {other:?}"),
         }
+
+        let background = crate::terminal_theme::RgbColor {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        };
+        assert!(matches!(
+            (ClientInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color: background,
+            })
+            .to_raw_input_event(),
+            crate::raw_input::RawInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color,
+            } if color == background
+        ));
     }
 
     #[test]

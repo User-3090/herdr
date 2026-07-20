@@ -65,9 +65,9 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertTrue(index.exists())
         text = index.read_text()
         missing = [
-            str(path.relative_to(project_root))
+            path.relative_to(project_root).as_posix()
             for path in patches
-            if str(path.relative_to(project_root)) not in text
+            if path.relative_to(project_root).as_posix() not in text
         ]
         self.assertEqual(missing, [])
 
@@ -103,13 +103,32 @@ class VendorPortablePtyTests(unittest.TestCase):
                 f"stderr:\n{result.stderr}",
             )
 
-    def test_windows_conpty_loader_does_not_probe_path_conpty_dll(self) -> None:
+    def test_windows_conpty_loader_uses_only_controlled_app_local_dll(self) -> None:
         project_root = Path(__file__).resolve().parent.parent
         source = project_root / "vendor" / "portable-pty" / "src" / "win" / "psuedocon.rs"
         text = source.read_text()
 
         self.assertIn('ConPtyFuncs::open(Path::new("kernel32.dll"))', text)
+        self.assertIn("std::env::current_exe()", text)
+        self.assertIn('exe_dir.join("conpty.dll")', text)
+        self.assertIn('exe_dir.join("OpenConsole.exe")', text)
+        self.assertIn("ConPtyFuncs::open(&dll)", text)
         self.assertNotIn('Path::new("conpty.dll")', text)
+
+    def test_windows_conpty_package_is_pinned_and_bundled_as_a_pair(self) -> None:
+        project_root = Path(__file__).resolve().parent.parent
+        script = (project_root / "scripts" / "prepare_windows_conpty.ps1").read_text()
+
+        self.assertIn('packageVersion = "1.24.260710001"', script)
+        self.assertIn(
+            'packageSha256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"',
+            script,
+        )
+        self.assertIn('Join-Path $destinationPath "conpty.dll"', script)
+        self.assertIn('Join-Path $destinationPath "OpenConsole.exe"', script)
+        self.assertTrue(
+            (project_root / "vendor" / "licenses" / "Microsoft.Windows.Console.ConPTY.LICENSE.txt").is_file()
+        )
 
 
 if __name__ == "__main__":

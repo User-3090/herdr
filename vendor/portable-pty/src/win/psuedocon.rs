@@ -49,7 +49,27 @@ fn load_conpty() -> ConPtyFuncs {
         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
     );
 
-    kernel
+    // Only load an app-local ConPTY that Herdr deliberately deployed beside
+    // its executable. Never probe for a bare conpty.dll through the DLL search
+    // path; that can select another application's incompatible package.
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    else {
+        return kernel;
+    };
+    let dll = exe_dir.join("conpty.dll");
+    if !dll.is_file() {
+        return kernel;
+    }
+
+    let host = exe_dir.join("OpenConsole.exe");
+    assert!(
+        host.is_file(),
+        "bundled conpty.dll exists, but matching OpenConsole.exe is missing"
+    );
+
+    ConPtyFuncs::open(&dll).expect("failed to load bundled conpty.dll")
 }
 
 lazy_static! {
