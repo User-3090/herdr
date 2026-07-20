@@ -612,7 +612,8 @@ mod windows_tests {
     #[test]
     fn windows_host_color_replies_convert_to_semantic_events() {
         let mut framer = windows_host_input_framer(true);
-        let events = framer.push(b"\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\");
+        let events =
+            framer.push(b"\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\");
         let events = events
             .into_iter()
             .filter_map(windows_client_input_event_from_raw)
