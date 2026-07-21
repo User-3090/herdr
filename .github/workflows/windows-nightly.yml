@@ -249,15 +249,14 @@ jobs:
           test -f "$zip"
           test -f "$checksum"
 
-          printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n\n%s' \
+          printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s' \
             "Automated Windows prerelease." \
             "Fork commit: ${SOURCE_SHA}" \
             "Upstream commit included: ${UPSTREAM_SHA}" \
             "Microsoft ConPTY package: ${CONPTY_VERSION}" \
             "Microsoft ConPTY package SHA-256: ${CONPTY_SHA256}" \
             "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            "The ZIP bundles herdr.exe, the signature-verified app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable." \
-            "On-device Windows runtime validation is still required for the open mouse, modified Backspace/Delete, and clipboard-image reports."
+            "The ZIP bundles herdr.exe, the signature-verified app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable."
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
