@@ -1747,7 +1747,8 @@ mod tests {
             core.transient_default_color_owner_pgid = Some(42);
             core.child_default_foreground_changed = true;
             core.child_cursor_color_changed = true;
-            core.terminal.write(b"\x1b]10;#112233\x07\x1b]12;#445566\x07");
+            core.terminal
+                .write(b"\x1b]10;#112233\x07\x1b]12;#445566\x07");
 
             assert!(restore_host_terminal_theme_if_needed(
                 &mut core,
