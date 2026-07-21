@@ -163,7 +163,10 @@ jobs:
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr raw_input::tests
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client::input
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_color
-          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr cursor
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr pane::cursor::tests
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr cursor_color
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr terminal_restore_postlude
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_theme_update_preserves_cursor
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr render_ansi::tests
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr app_theme_
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client_input_events_roundtrip
