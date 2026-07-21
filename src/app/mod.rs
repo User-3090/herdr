@@ -2453,10 +2453,9 @@ mod tests {
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
 
         assert!(!app.state.theme_runtime.auto_switch);
-        assert!(!app.set_host_terminal_appearance(
-            crate::terminal_theme::HostAppearance::Light,
-            false,
-        ));
+        assert!(
+            !app.set_host_terminal_appearance(crate::terminal_theme::HostAppearance::Light, false,)
+        );
         assert_eq!(app.state.theme_name, "catppuccin");
     }
 

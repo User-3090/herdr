@@ -1226,7 +1226,9 @@ mod tests {
     #[test]
     fn semantic_event_flushes_pending_escape_first() {
         let mut pump = WindowsInputPump::for_host_input(true);
-        assert!(pump.process(PlatformInputItem::Bytes(vec![0x1b])).is_empty());
+        assert!(pump
+            .process(PlatformInputItem::Bytes(vec![0x1b]))
+            .is_empty());
         let key = crate::protocol::ClientInputEvent::Key {
             code: crate::protocol::ClientKeyCode::Up,
             modifiers: 0,
