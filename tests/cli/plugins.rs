@@ -111,6 +111,64 @@ fn named_sessions_share_live_plugin_registry() {
 }
 
 #[test]
+fn plugin_link_works_offline_and_is_global() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let state_home = base.join("state");
+    let plugin_dir = base.join("plugins").join("offline");
+    fs::create_dir_all(&plugin_dir).unwrap();
+    fs::write(
+        plugin_dir.join("herdr-plugin.toml"),
+        r#"
+id = "example.offline"
+name = "Offline Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos", "windows"]
+"#,
+    )
+    .unwrap();
+
+    let link_args = [
+        "--session",
+        "offline",
+        "plugin",
+        "link",
+        plugin_dir.to_str().unwrap(),
+        "--disabled",
+    ];
+    let linked = parse_cli_json_output(
+        &link_args,
+        run_named_cli_with_env(
+            &config_home,
+            &runtime_dir,
+            &link_args,
+            &[("XDG_STATE_HOME", &state_home)],
+        ),
+    );
+    assert_eq!(linked["result"]["type"], "plugin_linked");
+    assert_eq!(linked["result"]["plugin"]["plugin_id"], "example.offline");
+    assert_eq!(linked["result"]["plugin"]["enabled"], false);
+    assert_eq!(linked["result"]["plugin"]["source"]["kind"], "local");
+    assert!(!named_session_socket(&config_home, "offline").exists());
+
+    let listed = run_named_cli_json(
+        &config_home,
+        &runtime_dir,
+        &["--session", "other", "plugin", "list", "--json"],
+    );
+    assert_eq!(listed["result"]["plugins"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        listed["result"]["plugins"][0]["plugin_id"],
+        "example.offline"
+    );
+    assert_eq!(listed["result"]["plugins"][0]["enabled"], false);
+
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn plugin_install_through_named_server_is_global() {
     let base = unique_test_dir();
     let config_home = base.join("config");

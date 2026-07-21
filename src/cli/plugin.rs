@@ -69,11 +69,20 @@ fn plugin_link(args: &[String]) -> std::io::Result<i32> {
             }
         }
     }
-    print_plugin_response(Method::PluginLink(PluginLinkParams {
+    let params = PluginLinkParams {
         path,
         enabled,
         source: None,
-    }))
+    };
+    let response = match super::send_request(&Request {
+        id: "cli:plugin".into(),
+        method: Method::PluginLink(params.clone()),
+    }) {
+        Ok(response) => response,
+        Err(err) if is_connection_error(&err) => offline_plugin_link_response(&params)?,
+        Err(err) => return Err(err),
+    };
+    super::print_response(&response)
 }
 
 fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
@@ -893,6 +902,15 @@ fn load_cli_plugin_manifest(path: &Path, enabled: bool) -> std::io::Result<Insta
         .map_err(|(_, message)| std::io::Error::other(message))
 }
 
+fn persist_plugin_offline(plugin: &InstalledPluginInfo) -> std::io::Result<()> {
+    crate::plugin_paths::ensure_plugin_user_dirs(&plugin.plugin_id)?;
+    crate::persist::plugin_registry::update(|plugins| {
+        plugins.retain(|entry| entry.plugin_id != plugin.plugin_id);
+        plugins.push(plugin.clone());
+    })?;
+    Ok(())
+}
+
 fn register_installed_plugin(
     plugin: InstalledPluginInfo,
     source: PluginSourceInfo,
@@ -948,14 +966,7 @@ fn register_installed_plugin(
             Ok(())
         }
         Err(err) if is_connection_error(&err) => {
-            crate::plugin_paths::ensure_plugin_user_dirs(&plugin.plugin_id)
-                .map_err(InstallFailure::Rollback)?;
-            crate::persist::plugin_registry::update(|plugins| {
-                plugins.retain(|entry| entry.plugin_id != plugin.plugin_id);
-                plugins.push(plugin);
-            })
-            .map(|_| ())
-            .map_err(InstallFailure::Rollback)
+            persist_plugin_offline(&plugin).map_err(InstallFailure::Rollback)
         }
         Err(err) => Err(InstallFailure::Rollback(err)),
     }
@@ -1083,6 +1094,16 @@ fn plugin_matches_github_source(plugin: &InstalledPluginInfo, source: &GithubPlu
         && plugin.source.owner.as_deref() == Some(source.owner.as_str())
         && plugin.source.repo.as_deref() == Some(source.repo.as_str())
         && plugin.source.subdir.as_deref() == source.subdir.as_deref()
+}
+
+fn offline_plugin_link_response(params: &PluginLinkParams) -> std::io::Result<serde_json::Value> {
+    let plugin = load_cli_plugin_manifest(Path::new(&params.path), params.enabled)?;
+    persist_plugin_offline(&plugin)?;
+    serde_json::to_value(SuccessResponse {
+        id: "cli:plugin".into(),
+        result: ResponseResult::PluginLinked { plugin },
+    })
+    .map_err(std::io::Error::other)
 }
 
 fn offline_plugin_list_response(params: &PluginListParams) -> std::io::Result<serde_json::Value> {
