@@ -113,6 +113,9 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertIn('exe_dir.join("conpty.dll")', text)
         self.assertIn('exe_dir.join("OpenConsole.exe")', text)
         self.assertIn("ConPtyFuncs::open(&dll)", text)
+        self.assertIn('const CONPTY_BACKEND_ENV: &str = "HERDR_CONPTY_BACKEND"', text)
+        self.assertIn("WINDOWS_11_MIN_BUILD", text)
+        self.assertIn('get_value("CurrentBuildNumber")', text)
         self.assertNotIn('Path::new("conpty.dll")', text)
 
     def test_windows_conpty_package_defaults_and_nightly_resolver(self) -> None:

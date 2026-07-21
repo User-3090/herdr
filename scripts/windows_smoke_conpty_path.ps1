@@ -4,7 +4,10 @@ param(
 
     [string] $Session = "ci-windows-$([guid]::NewGuid().ToString('N'))",
 
-    [string] $ExpectedHostPath
+    [string] $ExpectedHostPath,
+
+    [ValidateSet("auto", "system", "bundled")]
+    [string] $ConPtyBackend = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,8 +64,15 @@ Invoke-Checked rustc @("--crate-type", "cdylib", "--edition", "2021", $fakeSourc
 
 $oldPath = $env:PATH
 $oldSession = $env:HERDR_SESSION
+$hadConPtyBackend = Test-Path Env:HERDR_CONPTY_BACKEND
+$oldConPtyBackend = $env:HERDR_CONPTY_BACKEND
 $env:PATH = "$fakeDir;$oldPath"
 $env:HERDR_SESSION = $Session
+if ($ConPtyBackend -eq "auto") {
+    Remove-Item Env:HERDR_CONPTY_BACKEND -ErrorAction SilentlyContinue
+} else {
+    $env:HERDR_CONPTY_BACKEND = $ConPtyBackend
+}
 
 $server = $null
 try {
@@ -158,5 +168,10 @@ try {
     $global:LASTEXITCODE = 0
     $env:PATH = $oldPath
     $env:HERDR_SESSION = $oldSession
+    if ($hadConPtyBackend) {
+        $env:HERDR_CONPTY_BACKEND = $oldConPtyBackend
+    } else {
+        Remove-Item Env:HERDR_CONPTY_BACKEND -ErrorAction SilentlyContinue
+    }
     Remove-Item -Recurse -Force $fakeDir -ErrorAction SilentlyContinue
 }
