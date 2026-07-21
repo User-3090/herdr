@@ -88,6 +88,12 @@ herdr agent rename w1:p2 reviewer
 
 CLI では、`pane read` と `agent read` のどちらもターミナルテキストを直接出力します。デフォルトは ANSI エスケープを除去した UTF-8 テキストです。ソースに装飾が含まれる場合、`--format ansi` または `--ansi` でエスケープを残します。`detection` ソースは常にプレーンテキストです。すべての read ソースで、`--lines N` は末尾の N 論理行を返します。socket API ではテキストを `.result.read.text` に返します。
 
+## 既知の注意点: 代替画面の出力
+
+Claude Code や OpenCode などの全画面エージェントは、ターミナルの代替画面に描画することがあります。代替画面の行は Herdr のホスト側スクロールバックには入りません。応答が表示中のペインを超えると、アプリが表示しなくなった行を `recent` や `recent-unwrapped` で復元することはできません。`--lines` を増やしても、その履歴は取得できません。フォントが大きい場合やペインが小さい場合は、より起こりやすくなります。
+
+エージェントに簡潔な応答を求めるか、ペインを広げる、フォントを小さくする、またはエージェント自身のトランスクリプトやスクロール操作を使ってください。エージェント内でスクロールした後、`--source visible` を使うと、現在描画されているページを読み取れます。
+
 成功した `agent start`、`agent prompt`、`agent wait` は現在のエージェントを `.result.agent` に返します。`pane wait-output` は `.result.pane_id`、`.result.matched_line`、一致したスナップショット `.result.read` を返します。
 
 wait コマンドにはデフォルトのタイムアウトがなく、無期限に待機できます。タイムアウトやサーバーエラーでは JSON エラーを stderr に出して終了コード 1、CLI 構文エラーでは終了コード 2 を返します。
