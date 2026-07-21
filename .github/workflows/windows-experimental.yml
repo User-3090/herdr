@@ -102,6 +102,10 @@ jobs:
         shell: pwsh
         run: |
           $artifact = Join-Path $PWD "artifact\herdr-windows-x86_64"
+          $version = & (Join-Path $artifact "herdr.exe") --version
+          if (-not $version.Contains("experimental.$env:GITHUB_SHA")) {
+            throw "Experimental build identity missing from packaged executable: $version"
+          }
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath (Join-Path $artifact "herdr.exe") -ExpectedHostPath (Join-Path $artifact "x64\OpenConsole.exe") -Session "ci-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Upload experimental artifact

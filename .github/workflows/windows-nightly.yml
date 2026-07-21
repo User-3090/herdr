@@ -225,6 +225,10 @@ jobs:
         shell: pwsh
         run: |
           $package = Join-Path $PWD "artifact\$env:ARTIFACT_NAME"
+          $version = & (Join-Path $package "herdr.exe") --version
+          if (-not $version.Contains("nightly.$env:SOURCE_SHA")) {
+            throw "Nightly build identity missing from packaged executable: $version"
+          }
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath (Join-Path $package "herdr.exe") -ExpectedHostPath (Join-Path $package "x64\OpenConsole.exe") -Session "nightly-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Upload tested package
