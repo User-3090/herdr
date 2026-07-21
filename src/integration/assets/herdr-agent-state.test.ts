@@ -66,14 +66,17 @@ type Handler = (event: unknown, context: unknown) => unknown;
 
 function createExtensionHarness() {
   const handlers = new Map<string, Handler>();
+  const eventHandlers = new Map<string, Handler>();
   return {
     handlers,
+    eventHandlers,
     pi: {
       on(event: string, handler: Handler) {
         handlers.set(event, handler);
       },
       events: {
-        on() {
+        on(event: string, handler: Handler) {
+          eventHandlers.set(event, handler);
           return () => {};
         },
       },
@@ -223,6 +226,62 @@ for (const integration of integrations) {
     expect(reportedState()).toBe("working");
   });
 }
+
+test("Pi reports idle only after the agent settles", async () => {
+  const requests = await startRecordingServer("pi-settled");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  expect(completionHandlers(handlers)).toEqual(["agent_settled"]);
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+  expect(handlers.has("agent_end")).toBe(false);
+
+  const requestCountBeforeStaleSettlement = requests.length;
+  handlers.get("agent_settled")?.({}, context);
+  await Bun.sleep(25);
+  expect(requests).toHaveLength(requestCountBeforeStaleSettlement);
+  expect(requestStates(requests)).toEqual(["idle", "working"]);
+
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "idle"]);
+});
+
+test("Pi settlement preserves explicit blocked-state precedence", async () => {
+  const requests = await startRecordingServer("pi-settled-blocked");
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked"]);
+
+  eventHandlers.get("herdr:blocked")?.({ active: false }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
+});
 
 test("Pi reports the session replacement source", async () => {
   const requests = await startRecordingServer("pi-session-source");
@@ -446,6 +505,35 @@ test("Pi retries working state after an unanswered socket attempt", async () => 
   expect(attemptedRequests[1]).toEqual(attemptedRequests[0]);
   expect(reportedWorking()).toBe(true);
 });
+
+function completionHandlers(handlers: Map<string, Handler>): string[] {
+  return ["agent_end", "agent_settled"].filter((event) => handlers.has(event));
+}
+
+function piContext(isIdle: () => boolean) {
+  return {
+    hasUI: true,
+    isIdle,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => undefined,
+    },
+  };
+}
+
+function requestStates(requests: unknown[]): unknown[] {
+  return requests
+    .filter((request) => isRecord(request) && request.method === "pane.report_agent")
+    .map(requestState);
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !predicate()) {
+    await Bun.sleep(5);
+  }
+  expect(predicate()).toBe(true);
+}
 
 function requestState(request: unknown): unknown {
   if (!isRecord(request) || !isRecord(request.params)) {
