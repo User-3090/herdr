@@ -18,7 +18,10 @@ diff --git a/vendor/portable-pty/src/win/psuedocon.rs b/vendor/portable-pty/src/
 index 0000000..0000000 100644
 --- a/vendor/portable-pty/src/win/psuedocon.rs
 +++ b/vendor/portable-pty/src/win/psuedocon.rs
-@@ -44,0 +45,14 @@ shared_library!(ConPtyFuncs,
+@@ -42,6 +42,20 @@ shared_library!(ConPtyFuncs,
+     pub fn ClosePseudoConsole(hpc: HPCON),
+ );
+ 
 +#[cfg(target_arch = "x86")]
 +const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x86", "x64", "arm64"];
 +#[cfg(target_arch = "x86_64")]
@@ -33,7 +36,13 @@ index 0000000..0000000 100644
 +        .is_file()
 +}
 +
-@@ -52,7 +66,20 @@ fn load_conpty() -> ConPtyFuncs {
+ fn load_conpty() -> ConPtyFuncs {
+     // If the kernel doesn't export these functions then their system is
+     // too old and we cannot run.
+@@ -49,14 +63,36 @@ fn load_conpty() -> ConPtyFuncs {
+         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
+     );
+ 
 -    // We prefer to use a sideloaded conpty.dll and openconsole.exe host deployed
 -    // alongside the application.  We check for this after checking for kernel
 -    // support so that we don't try to proceed and do something crazy.
@@ -61,7 +70,7 @@ index 0000000..0000000 100644
 +            "bundled OpenConsole.exe exists, but matching conpty.dll is missing"
 +        );
 +        return kernel;
-@@ -59,0 +87,9 @@ fn load_conpty() -> ConPtyFuncs {
+     }
 +
 +    assert!(
 +        APP_LOCAL_CONSOLE_HOST_ARCHES
@@ -71,3 +80,6 @@ index 0000000..0000000 100644
 +    );
 +
 +    ConPtyFuncs::open(&dll).expect("failed to load bundled conpty.dll")
+ }
+ 
+ lazy_static! {
