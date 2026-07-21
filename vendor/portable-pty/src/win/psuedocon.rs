@@ -42,6 +42,20 @@ shared_library!(ConPtyFuncs,
     pub fn ClosePseudoConsole(hpc: HPCON),
 );
 
+#[cfg(target_arch = "x86")]
+const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x86", "x64", "arm64"];
+#[cfg(target_arch = "x86_64")]
+const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x64", "arm64"];
+#[cfg(target_arch = "aarch64")]
+const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["arm64"];
+
+fn app_local_console_host_exists(exe_dir: &Path, architecture: &str) -> bool {
+    exe_dir
+        .join(architecture)
+        .join("OpenConsole.exe")
+        .is_file()
+}
+
 fn load_conpty() -> ConPtyFuncs {
     // If the kernel doesn't export these functions then their system is
     // too old and we cannot run.
@@ -60,13 +74,22 @@ fn load_conpty() -> ConPtyFuncs {
     };
     let dll = exe_dir.join("conpty.dll");
     if !dll.is_file() {
+        let partial_bundle = exe_dir.join("OpenConsole.exe").is_file()
+            || ["x86", "x64", "arm64"]
+                .iter()
+                .any(|architecture| app_local_console_host_exists(&exe_dir, architecture));
+        assert!(
+            !partial_bundle,
+            "bundled OpenConsole.exe exists, but matching conpty.dll is missing"
+        );
         return kernel;
     }
 
-    let host = exe_dir.join("OpenConsole.exe");
     assert!(
-        host.is_file(),
-        "bundled conpty.dll exists, but matching OpenConsole.exe is missing"
+        APP_LOCAL_CONSOLE_HOST_ARCHES
+            .iter()
+            .all(|architecture| app_local_console_host_exists(&exe_dir, architecture)),
+        "bundled conpty.dll exists, but one or more required OpenConsole.exe architectures are missing"
     );
 
     ConPtyFuncs::open(&dll).expect("failed to load bundled conpty.dll")

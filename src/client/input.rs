@@ -208,7 +208,7 @@ fn windows_crossterm_reader_loop(
 
         if raw_sequence_pending {
             tracing::debug!("windows input raw sequence interrupted by semantic event; flushing");
-            if !send_windows_raw_events(framer.flush_timeout(), &event_tx) {
+            if !send_windows_raw_events(framer.flush_before_semantic_event(), &event_tx) {
                 return;
             }
         }

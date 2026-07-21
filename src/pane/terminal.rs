@@ -943,7 +943,7 @@ impl GhosttyPaneTerminal {
             let foreground_unowned = !core.child_default_foreground_changed;
             let background_unowned = !core.child_default_background_changed;
             core.host_terminal_theme = theme;
-            if foreground_unowned && background_unowned {
+            if foreground_unowned && background_unowned && !core.child_cursor_color_changed {
                 core.transient_default_color_owner_pgid = None;
             }
             write_host_terminal_theme_selective(
@@ -2708,7 +2708,14 @@ fn respond_to_default_color_event(
             default_color_event_response(core, event)
         }
         DefaultColorEvent::Set(query) => {
-            mark_child_default_color_changed(core, query, true);
+            let changed = !matches!(query, DefaultColorQuery::Cursor)
+                || core
+                    .terminal
+                    .effective_cursor_color()
+                    .ok()
+                    .flatten()
+                    .is_some();
+            mark_child_default_color_changed(core, query, changed);
             None
         }
         DefaultColorEvent::Reset(query) => {
@@ -2910,7 +2917,7 @@ fn contains_kitty_graphics_sequence(bytes: &[u8]) -> bool {
 }
 
 fn should_probe_host_terminal_theme_restore(core: &GhosttyPaneCore) -> bool {
-    if core.transient_default_color_owner_pgid.is_none() || core.host_terminal_theme.is_empty() {
+    if core.transient_default_color_owner_pgid.is_none() {
         return false;
     }
 
@@ -5366,6 +5373,28 @@ mod tests {
 
         pane.process_pty_bytes(pane_id, 0, b"\x1b]112\x07", &tx);
         assert_eq!(pane.cursor_state().unwrap().color, None);
+    }
+
+    #[test]
+    fn host_theme_update_preserves_cursor_only_override_owner() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        {
+            let mut core = pane.core.lock().unwrap();
+            core.transient_default_color_owner_pgid = Some(42);
+            core.child_cursor_color_changed = true;
+        }
+
+        pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+            foreground: Some(crate::terminal_theme::RgbColor { r: 1, g: 2, b: 3 }),
+            background: Some(crate::terminal_theme::RgbColor { r: 4, g: 5, b: 6 }),
+        });
+
+        assert_eq!(
+            pane.core.lock().unwrap().transient_default_color_owner_pgid,
+            Some(42)
+        );
     }
 
     #[test]

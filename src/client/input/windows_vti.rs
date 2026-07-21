@@ -249,7 +249,7 @@ impl WindowsInputPump {
                 self.process_raw_events(raw_events)
             }
             PlatformInputItem::Semantic(event) => {
-                let raw_events = self.framer.flush_timeout();
+                let raw_events = self.framer.flush_before_semantic_event();
                 let mut events = self.process_raw_events(raw_events);
                 events.push(event);
                 events
@@ -289,7 +289,7 @@ impl WindowsInputPump {
                     let raw_events = self.framer.push(bytes);
                     self.process_raw_events(raw_events)
                 } else {
-                    let raw_events = self.framer.flush_timeout();
+                    let raw_events = self.framer.flush_before_semantic_event();
                     let mut output = self.process_raw_events(raw_events);
                     output.extend(events);
                     output
@@ -1219,6 +1219,29 @@ mod tests {
                         b: 0x56,
                     },
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn semantic_event_flushes_pending_escape_first() {
+        let mut pump = WindowsInputPump::for_host_input(true);
+        assert!(pump.process(PlatformInputItem::Bytes(vec![0x1b])).is_empty());
+        let key = crate::protocol::ClientInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Up,
+            modifiers: 0,
+            kind: crate::protocol::ClientKeyKind::Press,
+        };
+
+        assert_eq!(
+            pump.process(PlatformInputItem::Semantic(key.clone())),
+            vec![
+                crate::protocol::ClientInputEvent::Key {
+                    code: crate::protocol::ClientKeyCode::Esc,
+                    modifiers: 0,
+                    kind: crate::protocol::ClientKeyKind::Press,
+                },
+                key,
             ]
         );
     }

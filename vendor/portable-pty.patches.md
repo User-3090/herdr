@@ -25,8 +25,10 @@ local files:
 reason: `portable-pty` intentionally probes a bare `conpty.dll` after verifying
 that `kernel32.dll` exports the ConPTY API. Herdr must not load another
 application's DLL from the search path. It may use Microsoft's pinned app-local
-package when `conpty.dll` and its matching `OpenConsole.exe` are deliberately
-deployed beside `herdr.exe`; otherwise it retains the system implementation.
+package when `conpty.dll` and all OpenConsole architectures required by the
+application are deliberately deployed beside `herdr.exe`; otherwise it retains
+the system implementation. Architecture-specific hosts live under `x86/`,
+`x64/`, and `arm64/` as required by Microsoft's package layout.
 
 remove when: upstream `portable-pty` accepts an explicit absolute app-local
 ConPTY path with a system fallback, or Herdr replaces the Windows PTY backend.
@@ -37,9 +39,9 @@ verification:
 python3 -m unittest scripts.test_vendor_portable_pty
 ```
 
-On Windows, verify that a PATH-only `conpty.dll` is ignored, a sibling Microsoft
-pair starts the sibling `OpenConsole.exe`, and removing the pair restores system
-ConPTY.
+On Windows, verify that a PATH-only `conpty.dll` is ignored, an app-local
+Microsoft package starts the native-architecture `OpenConsole.exe`, and removing
+the package restores system ConPTY.
 
 ## 0002 expose Windows raw command tails
 

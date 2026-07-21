@@ -111,7 +111,8 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertIn('ConPtyFuncs::open(Path::new("kernel32.dll"))', text)
         self.assertIn("std::env::current_exe()", text)
         self.assertIn('exe_dir.join("conpty.dll")', text)
-        self.assertIn('exe_dir.join("OpenConsole.exe")', text)
+        self.assertIn("APP_LOCAL_CONSOLE_HOST_ARCHES", text)
+        self.assertIn('.join("OpenConsole.exe")', text)
         self.assertIn("ConPtyFuncs::open(&dll)", text)
         self.assertNotIn('Path::new("conpty.dll")', text)
 
@@ -127,13 +128,17 @@ class VendorPortablePtyTests(unittest.TestCase):
             script,
         )
         self.assertIn('Join-Path $destinationPath "conpty.dll"', script)
-        self.assertIn('Join-Path $destinationPath "OpenConsole.exe"', script)
+        self.assertIn('"x64" { "x64"; "arm64" }', script)
+        self.assertIn('Join-Path $hostDirectory "OpenConsole.exe"', script)
         self.assertTrue(resolver_path.is_file())
         self.assertIn("https://api.nuget.org/v3-flatcontainer", resolver)
         self.assertIn("IncludePrerelease", resolver)
+        self.assertIn("SemanticVersion", resolver)
+        self.assertIn("--certificate-fingerprint", resolver)
         self.assertIn("& dotnet nuget verify", resolver)
         self.assertIn("runtimes\\win-x64\\native\\conpty.dll", resolver)
         self.assertIn("build\\native\\runtimes\\x64\\OpenConsole.exe", resolver)
+        self.assertIn("build\\native\\runtimes\\arm64\\OpenConsole.exe", resolver)
         self.assertTrue(
             (project_root / "vendor" / "licenses" / "Microsoft.Windows.Console.ConPTY.LICENSE.txt").is_file()
         )

@@ -911,9 +911,6 @@ pub(super) fn restore_host_terminal_theme_if_needed(
     let Some(owner_pgid) = core.transient_default_color_owner_pgid else {
         return false;
     };
-    if core.host_terminal_theme.is_empty() {
-        return false;
-    }
     if !should_restore_host_terminal_theme(owner_pgid, shell_pid, alternate_screen, foreground_job)
     {
         return false;
@@ -1726,5 +1723,30 @@ mod tests {
 
         assert_eq!(pane_default_theme(&pane).background, host_theme.background);
         assert_eq!(pane_default_theme(&pane).foreground, host_theme.foreground);
+    }
+
+    #[test]
+    fn restore_cursor_override_without_known_host_colors() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = super::super::GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let shell_pid = 7;
+        {
+            let mut core = pane.core.lock().unwrap();
+            core.transient_default_color_owner_pgid = Some(42);
+            core.child_cursor_color_changed = true;
+            core.terminal.write(b"\x1b]12;#112233\x07");
+            assert!(restore_host_terminal_theme_if_needed(
+                &mut core,
+                pane_id,
+                shell_pid,
+                false,
+                Some(&shell_job(shell_pid)),
+            ));
+        }
+
+        assert_eq!(pane.cursor_state().unwrap().color, None);
+        assert!(!pane.has_transient_default_color_override());
     }
 }

@@ -144,6 +144,10 @@ impl BlitEncoder {
     pub(crate) fn last_frame(&self) -> Option<&FrameData> {
         self.last_frame.as_ref()
     }
+
+    pub(crate) fn reset_frame_baseline(&mut self) {
+        self.last_frame = None;
+    }
 }
 
 pub(crate) fn frame_with_drawn_cursor(
@@ -182,10 +186,15 @@ fn insert_cursor_color_change(bytes: &mut Vec<u8>, color: Option<crate::terminal
         )
         .to_owned(),
     };
-    let insert_at = bytes
+    let sync_end = bytes
         .windows(SYNC_OUTPUT_END.len())
         .rposition(|window| window == SYNC_OUTPUT_END)
         .unwrap_or(bytes.len());
+    let cursor_show = b"\x1b[?25h";
+    let insert_at = bytes[..sync_end]
+        .windows(cursor_show.len())
+        .rposition(|window| window == cursor_show)
+        .unwrap_or(sync_end);
     bytes.splice(insert_at..insert_at, sequence.bytes());
 }
 
@@ -1431,6 +1440,36 @@ mod tests {
 
         frame.cursor.as_mut().unwrap().color = None;
         let encoded = encoder.encode(&frame, false);
+        assert!(encoded
+            .bytes
+            .windows(b"\x1b]112\x1b\\".len())
+            .any(|window| window == b"\x1b]112\x1b\\"));
+    }
+
+    #[test]
+    fn full_redraw_reset_preserves_physical_cursor_color_memory() {
+        let mut frame = FrameData {
+            cells: vec![make_cell("A", 0, 0, 0)],
+            width: 1,
+            height: 1,
+            cursor: Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 0,
+                color: Some(crate::terminal_theme::RgbColor { r: 1, g: 2, b: 3 }),
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let mut encoder = BlitEncoder::new();
+        let encoded = encoder.encode(&frame, false);
+        encoder.commit(frame.clone(), encoded);
+
+        encoder.reset_frame_baseline();
+        frame.cursor.as_mut().unwrap().color = None;
+        let encoded = encoder.encode(&frame, false);
+
         assert!(encoded
             .bytes
             .windows(b"\x1b]112\x1b\\".len())

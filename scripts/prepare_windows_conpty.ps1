@@ -42,16 +42,34 @@ try {
     Expand-Archive -LiteralPath $zipPath -DestinationPath $expandedPath
 
     $dll = Join-Path $expandedPath "runtimes\win-$Architecture\native\conpty.dll"
-    $consoleHost = Join-Path $expandedPath "build\native\runtimes\$Architecture\OpenConsole.exe"
+    $hostArchitectures = @(
+        switch ($Architecture) {
+            "x86" { "x86"; "x64"; "arm64" }
+            "x64" { "x64"; "arm64" }
+            "arm64" { "arm64" }
+        }
+    )
     if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
         throw "ConPTY package does not contain the expected DLL: $dll"
     }
-    if (-not (Test-Path -LiteralPath $consoleHost -PathType Leaf)) {
-        throw "ConPTY package does not contain the expected console host: $consoleHost"
+    foreach ($hostArchitecture in $hostArchitectures) {
+        $consoleHost = Join-Path $expandedPath "build\native\runtimes\$hostArchitecture\OpenConsole.exe"
+        if (-not (Test-Path -LiteralPath $consoleHost -PathType Leaf)) {
+            throw "ConPTY package does not contain the expected console host: $consoleHost"
+        }
     }
 
+    $legacyRootHost = Join-Path $destinationPath "OpenConsole.exe"
+    if (Test-Path -LiteralPath $legacyRootHost) {
+        Remove-Item -LiteralPath $legacyRootHost -Force
+    }
+    foreach ($hostArchitecture in $hostArchitectures) {
+        $hostDirectory = Join-Path $destinationPath $hostArchitecture
+        New-Item -ItemType Directory -Force -Path $hostDirectory | Out-Null
+        $consoleHost = Join-Path $expandedPath "build\native\runtimes\$hostArchitecture\OpenConsole.exe"
+        Copy-Item -LiteralPath $consoleHost -Destination (Join-Path $hostDirectory "OpenConsole.exe") -Force
+    }
     Copy-Item -LiteralPath $dll -Destination (Join-Path $destinationPath "conpty.dll") -Force
-    Copy-Item -LiteralPath $consoleHost -Destination (Join-Path $destinationPath "OpenConsole.exe") -Force
 
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $license = Join-Path $repoRoot "vendor\licenses\Microsoft.Windows.Console.ConPTY.LICENSE.txt"
@@ -61,6 +79,7 @@ try {
         "package=Microsoft.Windows.Console.ConPTY"
         "version=$packageVersion"
         "architecture=$Architecture"
+        "host_architectures=$($hostArchitectures -join ',')"
         "sha256=$packageSha256"
         "source=https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY/$packageVersion"
     ) | Set-Content -LiteralPath (Join-Path $destinationPath "Microsoft.Windows.Console.ConPTY.BUILD_INFO.txt") -Encoding ascii
@@ -68,9 +87,9 @@ try {
     @(
         "Herdr Windows 10 experimental bundle"
         ""
-        "Keep herdr.exe, conpty.dll, and OpenConsole.exe together in this directory."
-        "Herdr loads this exact sibling ConPTY pair and falls back to Windows system ConPTY"
-        "when conpty.dll is absent. A partial pair is treated as an installation error."
+        "Keep herdr.exe, conpty.dll, and the architecture host directories together."
+        "Herdr loads this exact app-local ConPTY package and falls back to Windows system ConPTY"
+        "when conpty.dll is absent. A partial package is treated as an installation error."
         ""
         "This is an experimental fork build, not an official upstream Herdr release."
     ) | Set-Content -LiteralPath (Join-Path $destinationPath "README-WINDOWS10-EXPERIMENTAL.txt") -Encoding ascii

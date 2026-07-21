@@ -302,7 +302,7 @@ fn theme_runtime_config(
         manual_name,
         dark_name: config.theme.dark_name.clone().unwrap_or(default_dark),
         light_name: config.theme.light_name.clone().unwrap_or(default_light),
-        auto_switch: config.theme.auto_switch || !has_explicit_theme,
+        auto_switch: config.theme.auto_switch.unwrap_or(!has_explicit_theme),
         custom: config.theme.custom.clone(),
         legacy_accent: (use_legacy_ui_accent
             && config.ui.accent != "cyan"
@@ -2446,6 +2446,21 @@ mod tests {
     }
 
     #[test]
+    fn explicit_false_disables_default_theme_auto_switch() {
+        let mut config = Config::default();
+        config.theme.auto_switch = Some(false);
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+
+        assert!(!app.state.theme_runtime.auto_switch);
+        assert!(!app.set_host_terminal_appearance(
+            crate::terminal_theme::HostAppearance::Light,
+            false,
+        ));
+        assert_eq!(app.state.theme_name, "catppuccin");
+    }
+
+    #[test]
     fn explicit_theme_preserves_manual_default_without_auto_switch() {
         let mut config = Config::default();
         config.theme.name = Some("tokyo-night".to_string());
@@ -2462,7 +2477,7 @@ mod tests {
     fn theme_auto_switch_uses_sibling_map_and_explicit_appearance() {
         let mut config = Config::default();
         config.theme.name = Some("tokyo-night".to_string());
-        config.theme.auto_switch = true;
+        config.theme.auto_switch = Some(true);
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
 
@@ -2479,7 +2494,7 @@ mod tests {
     fn theme_auto_switch_applies_custom_overrides_after_active_base() {
         let mut config = Config::default();
         config.theme.name = Some("gruvbox".to_string());
-        config.theme.auto_switch = true;
+        config.theme.auto_switch = Some(true);
         config.theme.custom = Some(crate::config::CustomThemeColors {
             accent: Some("#010203".to_string()),
             ..Default::default()
@@ -2500,7 +2515,7 @@ mod tests {
     fn inferred_background_appearance_does_not_override_explicit_report() {
         let mut config = Config::default();
         config.theme.name = Some("catppuccin".to_string());
-        config.theme.auto_switch = true;
+        config.theme.auto_switch = Some(true);
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
 

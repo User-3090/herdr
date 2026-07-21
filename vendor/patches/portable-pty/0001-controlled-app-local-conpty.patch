@@ -4,20 +4,36 @@ Date: Mon, 20 Jul 2026 00:00:00 +0000
 Subject: [PATCH] use controlled app-local ConPTY
 
 Never resolve a bare conpty.dll through the DLL search path. Use Microsoft's
-pinned app-local conpty.dll only when it and its matching OpenConsole.exe are
-deployed beside herdr.exe; otherwise retain the system implementation.
+pinned app-local conpty.dll only when all OpenConsole architectures required by
+the application are deployed beside herdr.exe; otherwise retain the system
+implementation.
 
 Herdr issue: https://github.com/ogulcancelik/herdr/issues/761
 Vendored base: portable-pty 0.9.0
 ---
- vendor/portable-pty/src/win/psuedocon.rs | 29 +++++++++++++++++++++--------
- 1 file changed, 21 insertions(+), 8 deletions(-)
+ vendor/portable-pty/src/win/psuedocon.rs | 50 +++++++++++++++++++++++++++----
+ 1 file changed, 43 insertions(+), 7 deletions(-)
 
 diff --git a/vendor/portable-pty/src/win/psuedocon.rs b/vendor/portable-pty/src/win/psuedocon.rs
 index 0000000..0000000 100644
 --- a/vendor/portable-pty/src/win/psuedocon.rs
 +++ b/vendor/portable-pty/src/win/psuedocon.rs
-@@ -52,9 +52,22 @@ fn load_conpty() -> ConPtyFuncs {
+@@ -44,0 +45,14 @@ shared_library!(ConPtyFuncs,
++#[cfg(target_arch = "x86")]
++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x86", "x64", "arm64"];
++#[cfg(target_arch = "x86_64")]
++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x64", "arm64"];
++#[cfg(target_arch = "aarch64")]
++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["arm64"];
++
++fn app_local_console_host_exists(exe_dir: &Path, architecture: &str) -> bool {
++    exe_dir
++        .join(architecture)
++        .join("OpenConsole.exe")
++        .is_file()
++}
++
+@@ -52,7 +66,20 @@ fn load_conpty() -> ConPtyFuncs {
 -    // We prefer to use a sideloaded conpty.dll and openconsole.exe host deployed
 -    // alongside the application.  We check for this after checking for kernel
 -    // support so that we don't try to proceed and do something crazy.
@@ -36,14 +52,23 @@ index 0000000..0000000 100644
 +    };
 +    let dll = exe_dir.join("conpty.dll");
 +    if !dll.is_file() {
++        let partial_bundle = exe_dir.join("OpenConsole.exe").is_file()
++            || ["x86", "x64", "arm64"]
++                .iter()
++                .any(|architecture| app_local_console_host_exists(&exe_dir, architecture));
++        assert!(
++            !partial_bundle,
++            "bundled OpenConsole.exe exists, but matching conpty.dll is missing"
++        );
 +        return kernel;
      }
+@@ -59,0 +87,9 @@ fn load_conpty() -> ConPtyFuncs {
 +
-+    let host = exe_dir.join("OpenConsole.exe");
 +    assert!(
-+        host.is_file(),
-+        "bundled conpty.dll exists, but matching OpenConsole.exe is missing"
++        APP_LOCAL_CONSOLE_HOST_ARCHES
++            .iter()
++            .all(|architecture| app_local_console_host_exists(&exe_dir, architecture)),
++        "bundled conpty.dll exists, but one or more required OpenConsole.exe architectures are missing"
 +    );
 +
 +    ConPtyFuncs::open(&dll).expect("failed to load bundled conpty.dll")
- }

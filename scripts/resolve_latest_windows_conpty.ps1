@@ -1,5 +1,7 @@
 param(
-    [switch] $IncludePrerelease
+    [switch] $IncludePrerelease,
+
+    [string] $PackageVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,18 +11,18 @@ $lowerPackageId = $packageId.ToLowerInvariant()
 $feedRoot = "https://api.nuget.org/v3-flatcontainer"
 $indexUrl = "$feedRoot/$lowerPackageId/index.json"
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "herdr-conpty-resolve-$([guid]::NewGuid().ToString('N'))"
+$microsoftAuthorCertificate = "566A31882BE208BE4422F7CFD66ED09F5D4524A5994F50CCC8B05EC0528C1353"
 
 function ConvertTo-VersionRecord([string] $Version) {
-    if ($Version -notmatch '^(?<major>[0-9]+)\.(?<minor>[0-9]+)\.(?<patch>[0-9]+)(?:-(?<prerelease>[0-9a-z.-]+))?$') {
+    try {
+        $parsed = [System.Management.Automation.SemanticVersion]::new($Version)
+    } catch {
         throw "Unsupported NuGet version returned for ${packageId}: $Version"
     }
     [pscustomobject]@{
-        Text = $Version
-        Major = [uint64] $Matches.major
-        Minor = [uint64] $Matches.minor
-        Patch = [uint64] $Matches.patch
-        Stable = [string]::IsNullOrEmpty($Matches.prerelease)
-        Prerelease = $Matches.prerelease
+        Text = $Version.ToLowerInvariant()
+        Parsed = $parsed
+        Stable = [string]::IsNullOrEmpty($parsed.PreReleaseLabel)
     }
 }
 
@@ -28,14 +30,17 @@ New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 try {
     $index = Invoke-RestMethod -UseBasicParsing -Uri $indexUrl
     $versions = @($index.versions | ForEach-Object { ConvertTo-VersionRecord $_ })
-    if (-not $IncludePrerelease) {
+    if (-not [string]::IsNullOrWhiteSpace($PackageVersion)) {
+        $requestedVersion = $PackageVersion.ToLowerInvariant()
+        $versions = @($versions | Where-Object Text -eq $requestedVersion)
+    } elseif (-not $IncludePrerelease) {
         $versions = @($versions | Where-Object Stable)
     }
     if ($versions.Count -eq 0) {
         throw "NuGet returned no matching versions for $packageId"
     }
 
-    $latest = $versions | Sort-Object Major, Minor, Patch, Stable, Prerelease | Select-Object -Last 1
+    $latest = $versions | Sort-Object Parsed | Select-Object -Last 1
     $packageVersion = $latest.Text.ToLowerInvariant()
     $packageUrl = "$feedRoot/$lowerPackageId/$packageVersion/$lowerPackageId.$packageVersion.nupkg"
     $packagePath = Join-Path $tempDir "$lowerPackageId.$packageVersion.nupkg"
@@ -43,7 +48,7 @@ try {
     $expandedPath = Join-Path $tempDir "package"
 
     Invoke-WebRequest -UseBasicParsing -Uri $packageUrl -OutFile $packagePath
-    $verifyOutput = & dotnet nuget verify $packagePath --all 2>&1
+    $verifyOutput = & dotnet nuget verify $packagePath --all --certificate-fingerprint $microsoftAuthorCertificate 2>&1
     $verifyExitCode = $LASTEXITCODE
     $verifyOutput | ForEach-Object { Write-Host $_ }
     if ($verifyExitCode -ne 0) {
@@ -66,7 +71,8 @@ try {
 
     $requiredFiles = @(
         (Join-Path $expandedPath 'runtimes\win-x64\native\conpty.dll'),
-        (Join-Path $expandedPath 'build\native\runtimes\x64\OpenConsole.exe')
+        (Join-Path $expandedPath 'build\native\runtimes\x64\OpenConsole.exe'),
+        (Join-Path $expandedPath 'build\native\runtimes\arm64\OpenConsole.exe')
     )
     foreach ($requiredFile in $requiredFiles) {
         if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
