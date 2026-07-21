@@ -39,9 +39,8 @@ use windows_sys::{
         },
         UI::{
             Shell::{
-                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO,
-                NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-                NOTIFYICONDATAW,
+                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
+                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
             },
             WindowsAndMessaging::{LoadIconW, IDI_APPLICATION},
         },
