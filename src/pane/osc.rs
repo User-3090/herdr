@@ -859,13 +859,6 @@ pub(super) fn should_restore_host_terminal_theme(
         && foreground_job_is_shell(foreground_job, shell_pid)
 }
 
-pub(super) fn write_host_terminal_theme(
-    terminal: &mut crate::ghostty::Terminal,
-    theme: crate::terminal_theme::TerminalTheme,
-) {
-    write_host_terminal_theme_selective(terminal, theme, true, true);
-}
-
 pub(super) fn write_host_terminal_theme_selective(
     terminal: &mut crate::ghostty::Terminal,
     theme: crate::terminal_theme::TerminalTheme,
@@ -916,24 +909,40 @@ pub(super) fn restore_host_terminal_theme_if_needed(
         return false;
     }
 
+    let foreground_changed = core.child_default_foreground_changed;
+    let background_changed = core.child_default_background_changed;
     let cursor_changed = core.child_cursor_color_changed;
-    core.transient_default_color_owner_pgid = None;
-    core.child_default_foreground_changed = false;
-    core.child_default_background_changed = false;
-    core.child_cursor_color_changed = false;
-    write_host_terminal_theme(&mut core.terminal, core.host_terminal_theme);
+    let restore_theme = !core.host_terminal_theme.is_empty()
+        && (foreground_changed || background_changed);
+    if restore_theme {
+        write_host_terminal_theme_selective(
+            &mut core.terminal,
+            core.host_terminal_theme,
+            foreground_changed,
+            background_changed,
+        );
+        core.child_default_foreground_changed = false;
+        core.child_default_background_changed = false;
+    }
     if cursor_changed {
         write_host_default_color(
             &mut core.terminal,
             crate::terminal_theme::DefaultColorKind::Cursor,
             None,
         );
+        core.child_cursor_color_changed = false;
+    }
+    if !core.child_default_foreground_changed
+        && !core.child_default_background_changed
+        && !core.child_cursor_color_changed
+    {
+        core.transient_default_color_owner_pgid = None;
     }
     info!(
         pane = pane_id.raw(),
         owner_pgid, "restored host terminal default colors after transient override"
     );
-    true
+    restore_theme || cursor_changed
 }
 
 #[cfg(test)]

@@ -63,10 +63,29 @@ jobs:
           if [[ "$before_sha" != "$after_sha" ]]; then
             changed=true
           fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" >/dev/null; then
+            echo "Repository release immutability must be enabled before publishing Windows nightlies." >&2
+            exit 1
+          fi
           release_tag="windows-nightly-${after_sha:0:12}-conpty-${CONPTY_VERSION}"
           release_exists=false
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            release_exists=true
+            release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
+            release_draft="$(jq -r .draft <<<"$release_json")"
+            if [[ "$release_draft" == "true" ]]; then
+              echo "Found interrupted draft ${release_tag}; it will be repaired."
+            else
+              tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+              release_prerelease="$(jq -r .prerelease <<<"$release_json")"
+              release_immutable="$(jq -r .immutable <<<"$release_json")"
+              asset_count="$(jq '.assets | length' <<<"$release_json")"
+              expected_assets="$(jq '[.assets[] | select(.name == "herdr-windows-x86_64.zip" or .name == "herdr-windows-x86_64.zip.sha256") | select(.digest | startswith("sha256:"))] | length' <<<"$release_json")"
+              if [[ "$tag_sha" != "$after_sha" || "$release_prerelease" != "true" || "$release_immutable" != "true" || "$asset_count" != "2" || "$expected_assets" != "2" ]]; then
+                echo "Existing release ${release_tag} failed immutable release verification." >&2
+                exit 1
+              fi
+              release_exists=true
+            fi
           fi
 
           {
@@ -167,6 +186,7 @@ jobs:
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr cursor_color
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr terminal_restore_postlude
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_theme_update_preserves_cursor
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_terminal_theme_restore_probe
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr render_ansi::tests
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr app_theme_
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client_input_events_roundtrip
@@ -297,32 +317,47 @@ jobs:
               exit 1
             fi
 
-            is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
-            asset_count="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
-            published_zip_digest="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "herdr-windows-x86_64.zip") | .digest')"
-            published_checksum_digest="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "herdr-windows-x86_64.zip.sha256") | .digest')"
-            if [[ "$is_draft" != "false" || "$asset_count" != "2" || "$published_zip_digest" != "$zip_digest" || "$published_checksum_digest" != "$checksum_digest" ]]; then
+            release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
+            is_draft="$(jq -r .draft <<<"$release_json")"
+            is_prerelease="$(jq -r .prerelease <<<"$release_json")"
+            is_immutable="$(jq -r .immutable <<<"$release_json")"
+            asset_count="$(jq '.assets | length' <<<"$release_json")"
+            published_zip_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip") | .digest' <<<"$release_json")"
+            published_checksum_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip.sha256") | .digest' <<<"$release_json")"
+            if [[ "$is_draft" != "false" || "$is_prerelease" != "true" || "$is_immutable" != "true" || "$asset_count" != "2" || "$published_zip_digest" != "$zip_digest" || "$published_checksum_digest" != "$checksum_digest" ]]; then
               echo "Existing release is incomplete or differs from this immutable build." >&2
               exit 1
             fi
           }
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            verify_release
+            release_draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq .draft)"
+            if [[ "$release_draft" == "true" ]]; then
+              tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
+              if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+                echo "Existing draft tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
+                exit 1
+              fi
+              gh release upload "$tag" "$zip" "$checksum" --clobber --repo "$GITHUB_REPOSITORY"
+              gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
+            fi
           else
             if tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha 2>/dev/null)" && [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
               echo "Existing tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
               exit 1
             fi
-            gh release create "$tag" "$zip" "$checksum" \
+            gh release create "$tag" \
               --target "$SOURCE_SHA" \
               --title "$title" \
               --notes "$notes" \
+              --draft \
               --prerelease \
               --latest=false \
               --repo "$GITHUB_REPOSITORY"
-            verify_release
+            gh release upload "$tag" "$zip" "$checksum" --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
           fi
+          verify_release
 
           release_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
 

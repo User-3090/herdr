@@ -63,6 +63,7 @@ jobs:
           cargo test --locked --target x86_64-pc-windows-msvc --bin herdr cursor_color
           cargo test --locked --target x86_64-pc-windows-msvc --bin herdr terminal_restore_postlude
           cargo test --locked --target x86_64-pc-windows-msvc --bin herdr host_theme_update_preserves_cursor
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr host_terminal_theme_restore_probe
           cargo test --locked --target x86_64-pc-windows-msvc --bin herdr render_ansi::tests
           cargo test --locked --target x86_64-pc-windows-msvc --bin herdr app_theme_
           cargo test --locked --target x86_64-pc-windows-msvc --bin herdr client_input_events_roundtrip

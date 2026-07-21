@@ -2920,6 +2920,9 @@ fn should_probe_host_terminal_theme_restore(core: &GhosttyPaneCore) -> bool {
     if core.transient_default_color_owner_pgid.is_none() {
         return false;
     }
+    if core.host_terminal_theme.is_empty() && !core.child_cursor_color_changed {
+        return false;
+    }
 
     !core
         .terminal
@@ -3531,6 +3534,21 @@ mod tests {
         let core = pane.core.lock().unwrap();
 
         assert!(!should_probe_host_terminal_theme_restore(&core));
+    }
+
+    #[test]
+    fn host_terminal_theme_restore_probe_allows_cursor_with_unknown_theme() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        {
+            let mut core = pane.core.lock().unwrap();
+            core.transient_default_color_owner_pgid = Some(42);
+            core.child_cursor_color_changed = true;
+        }
+        let core = pane.core.lock().unwrap();
+
+        assert!(should_probe_host_terminal_theme_restore(&core));
     }
 
     #[test]
