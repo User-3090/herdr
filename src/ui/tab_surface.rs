@@ -145,6 +145,7 @@ pub(crate) fn tab_surface_cursor(
             } else {
                 cursor.shape
             },
+            color: cursor.color,
         })
     } else if reveal && !scrolled_back {
         Some(CursorState {
@@ -152,6 +153,7 @@ pub(crate) fn tab_surface_cursor(
             y: info.inner_rect.y,
             visible: true,
             shape: app.cjk_ime_cursor_shape,
+            color: None,
         })
     } else {
         None

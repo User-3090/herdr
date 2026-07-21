@@ -453,8 +453,9 @@ argv pane creation are not part of v1.
 Installed and linked plugins persist across restarts. Herdr writes a
 `plugins.json` registry file alongside `session.json` on `plugin.link`,
 `plugin.unlink`, `plugin.enable`, and `plugin.disable`. The
-`herdr plugin install` CLI also writes the same registry when Herdr is not
-running, then startup loads it automatically. On startup, Herdr re-reads each
+`herdr plugin install` and `herdr plugin link` CLIs also write the same registry
+when Herdr is not running, then startup loads it automatically. On startup,
+Herdr re-reads each
 manifest from its original path; if the file is missing or unparseable the entry
 is kept with a `warnings` field so `plugin.list` surfaces it.
 

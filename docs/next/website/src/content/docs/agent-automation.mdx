@@ -88,6 +88,12 @@ Pane input addresses the terminal regardless of its current occupant. Agent inpu
 
 At the CLI, both `pane read` and `agent read` print terminal text directly. The default is UTF-8 text with ANSI escapes stripped; use `--format ansi` or `--ansi` to preserve terminal escapes where the source exposes them. The `detection` source is always plain text. For every read source, `--lines N` returns the last N logical lines. The socket API returns the text at `.result.read.text`.
 
+## Known caveat: alternate-screen output
+
+Full-screen agents such as Claude Code and OpenCode may render in the terminal's alternate screen. Alternate-screen rows do not enter Herdr's host scrollback. If a response exceeds the visible pane, `recent` and `recent-unwrapped` cannot recover rows that the app no longer displays; increasing `--lines` does not make that history available. A larger font or smaller pane makes this more likely.
+
+Ask the agent for concise responses, enlarge the pane or use a smaller font, or use the agent's own transcript and scrolling controls. After scrolling inside the agent, use `--source visible` to read the page it currently renders.
+
 Successful `agent start`, `agent prompt`, and `agent wait` commands return the current agent at `.result.agent`. `pane wait-output` returns `.result.pane_id`, `.result.matched_line`, and the matched snapshot at `.result.read`.
 
 Wait commands have no default timeout and can wait indefinitely. On timeout or another server error, CLI commands print a JSON error to stderr and exit with status 1; invalid CLI syntax exits with status 2.

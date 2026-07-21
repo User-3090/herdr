@@ -4,11 +4,11 @@ This file tracks intentional local changes applied on top of the vendored
 `portable-pty` source. Remove a patch only when the upstream crate contains an
 equivalent fix or exposes an option that lets Herdr keep the same behavior.
 
-## 0001 force system ConPTY
+## 0001 controlled app-local ConPTY
 
 status: active
 
-patch: `vendor/patches/portable-pty/0001-force-system-conpty.patch`
+patch: `vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch`
 
 herdr issue: https://github.com/ogulcancelik/herdr/issues/761
 
@@ -23,13 +23,15 @@ local files:
 - `vendor/portable-pty/src/win/psuedocon.rs`
 
 reason: `portable-pty` intentionally probes a bare `conpty.dll` after verifying
-that `kernel32.dll` exports the ConPTY API. That is useful for WezTerm's bundled
-`OpenConsole.exe` and `conpty.dll` pair, but Herdr does not ship that pair and
-must not load another application's `conpty.dll` from `PATH`.
+that `kernel32.dll` exports the ConPTY API. Herdr must not load another
+application's DLL from the search path. It may use Microsoft's pinned app-local
+package when `conpty.dll` and all OpenConsole architectures required by the
+application are deliberately deployed beside `herdr.exe`; otherwise it retains
+the system implementation. Architecture-specific hosts live under `x86/`,
+`x64/`, and `arm64/` as required by Microsoft's package layout.
 
-remove when: upstream `portable-pty` no longer loads bare `conpty.dll` from the
-DLL search path, upstream exposes a way for consumers to force system ConPTY, or
-Herdr replaces the Windows PTY backend.
+remove when: upstream `portable-pty` accepts an explicit absolute app-local
+ConPTY path with a system fallback, or Herdr replaces the Windows PTY backend.
 
 verification:
 
@@ -37,8 +39,9 @@ verification:
 python3 -m unittest scripts.test_vendor_portable_pty
 ```
 
-On Windows, also verify that pane creation succeeds when `PATH` contains a
-directory with `conpty.dll`.
+On Windows, verify that a PATH-only `conpty.dll` is ignored, an app-local
+Microsoft package starts the native-architecture `OpenConsole.exe`, and removing
+the package restores system ConPTY.
 
 ## 0002 expose Windows raw command tails
 

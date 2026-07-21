@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $ExePath,
 
-    [string] $Session = "ci-windows-$([guid]::NewGuid().ToString('N'))"
+    [string] $Session = "ci-windows-$([guid]::NewGuid().ToString('N'))",
+
+    [string] $ExpectedHostPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,6 +94,32 @@ try {
     if ([string]::IsNullOrWhiteSpace($paneId)) {
         throw "workspace create did not return a root pane id: $($created -join "`n")"
     }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedHostPath)) {
+        $expectedHost = (Resolve-Path $ExpectedHostPath).Path
+        $matchingHost = $null
+        $deadline = (Get-Date).AddSeconds(10)
+        do {
+            $matchingHost = Get-Process -Name OpenConsole -ErrorAction SilentlyContinue |
+                Where-Object {
+                    try {
+                        $_.Path -eq $expectedHost
+                    } catch {
+                        $false
+                    }
+                } |
+                Select-Object -First 1
+            if ($null -ne $matchingHost) {
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $deadline)
+
+        if ($null -eq $matchingHost) {
+            throw "pane did not start the expected app-local console host: $expectedHost"
+        }
+    }
+
     $marker = "HERDR_CONPTY_SMOKE_OK"
     Invoke-Checked $exe @("pane", "run", $paneId, "echo $marker")
 

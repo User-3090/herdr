@@ -65,9 +65,9 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertTrue(index.exists())
         text = index.read_text()
         missing = [
-            str(path.relative_to(project_root))
+            path.relative_to(project_root).as_posix()
             for path in patches
-            if str(path.relative_to(project_root)) not in text
+            if path.relative_to(project_root).as_posix() not in text
         ]
         self.assertEqual(missing, [])
 
@@ -103,13 +103,45 @@ class VendorPortablePtyTests(unittest.TestCase):
                 f"stderr:\n{result.stderr}",
             )
 
-    def test_windows_conpty_loader_does_not_probe_path_conpty_dll(self) -> None:
+    def test_windows_conpty_loader_uses_only_controlled_app_local_dll(self) -> None:
         project_root = Path(__file__).resolve().parent.parent
         source = project_root / "vendor" / "portable-pty" / "src" / "win" / "psuedocon.rs"
         text = source.read_text()
 
         self.assertIn('ConPtyFuncs::open(Path::new("kernel32.dll"))', text)
+        self.assertIn("std::env::current_exe()", text)
+        self.assertIn('exe_dir.join("conpty.dll")', text)
+        self.assertIn("APP_LOCAL_CONSOLE_HOST_ARCHES", text)
+        self.assertIn('.join("OpenConsole.exe")', text)
+        self.assertIn("ConPtyFuncs::open(&dll)", text)
         self.assertNotIn('Path::new("conpty.dll")', text)
+
+    def test_windows_conpty_package_defaults_and_nightly_resolver(self) -> None:
+        project_root = Path(__file__).resolve().parent.parent
+        script = (project_root / "scripts" / "prepare_windows_conpty.ps1").read_text()
+        resolver_path = project_root / "scripts" / "resolve_latest_windows_conpty.ps1"
+        resolver = resolver_path.read_text()
+
+        self.assertIn('[string] $PackageVersion = "1.24.260710001"', script)
+        self.assertIn(
+            '[string] $PackageSha256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"',
+            script,
+        )
+        self.assertIn('Join-Path $destinationPath "conpty.dll"', script)
+        self.assertIn('"x64" { "x64"; "arm64" }', script)
+        self.assertIn('Join-Path $hostDirectory "OpenConsole.exe"', script)
+        self.assertTrue(resolver_path.is_file())
+        self.assertIn("https://api.nuget.org/v3-flatcontainer", resolver)
+        self.assertIn("IncludePrerelease", resolver)
+        self.assertIn("SemanticVersion", resolver)
+        self.assertIn("--certificate-fingerprint", resolver)
+        self.assertIn("& dotnet nuget verify", resolver)
+        self.assertIn("runtimes\\win-x64\\native\\conpty.dll", resolver)
+        self.assertIn("build\\native\\runtimes\\x64\\OpenConsole.exe", resolver)
+        self.assertIn("build\\native\\runtimes\\arm64\\OpenConsole.exe", resolver)
+        self.assertTrue(
+            (project_root / "vendor" / "licenses" / "Microsoft.Windows.Console.ConPTY.LICENSE.txt").is_file()
+        )
 
 
 if __name__ == "__main__":

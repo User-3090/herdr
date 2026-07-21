@@ -31,7 +31,7 @@ impl ClientRenderState {
     pub(crate) fn reset_baseline(&mut self) {
         match self {
             Self::Semantic { last_frame } => *last_frame = None,
-            Self::TerminalAnsi { blit_encoder, .. } => *blit_encoder = BlitEncoder::new(),
+            Self::TerminalAnsi { blit_encoder, .. } => blit_encoder.reset_frame_baseline(),
         }
     }
 
@@ -202,6 +202,7 @@ impl CursorTrackingBackend {
             y: pos.y,
             visible: true,
             shape: 0,
+            color: None,
         })
     }
 }
@@ -343,6 +344,7 @@ fn popup_terminal_cursor(
         y: cursor.y,
         visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
         shape: cursor.shape,
+        color: cursor.color,
     })
 }
 
@@ -370,6 +372,7 @@ pub(crate) fn render_terminal_virtual(
             y: cursor.y,
             visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
             shape: cursor.shape,
+            color: cursor.color,
         })
         .or_else(|| {
             (!suppress_cursor)

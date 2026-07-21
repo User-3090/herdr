@@ -400,6 +400,8 @@ herdr plugin disable <plugin_id>
 
 `plugin install` accepts GitHub shorthand only, such as `ogulcancelik/herdr-plugin-examples/worktree-bootstrap`. It uses `git`, shows a trust preview in interactive terminals, runs supported manifest build commands, and stores GitHub installs in a Herdr-managed directory. Use `--yes` for noninteractive installs. Reinstalling a GitHub-managed plugin replaces that managed checkout. Installing over a locally linked plugin is refused. Plugin manifests must declare `min_herdr_version`; install and link fail when the plugin requires a newer Herdr binary. `plugin list` is human-readable by default; pass `--json` for the raw API response.
 
+Plugin installation and enabled state are global to the current user. A plugin installed, linked, enabled, or disabled through one Herdr session is immediately available with the same state in every session.
+
 Local development:
 
 ```bash

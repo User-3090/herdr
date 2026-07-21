@@ -1,0 +1,119 @@
+name: Windows experimental build
+
+on:
+  push:
+    branches: [windows-conpty-theme]
+
+concurrency:
+  group: windows-experimental-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+  HERDR_BUILD_CHANNEL: experimental
+  HERDR_BUILD_ID: ${{ github.sha }}
+  HERDR_BUILD_COMMIT: ${{ github.sha }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          components: rustfmt,clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+          use-cache: false
+
+      - name: Restore cargo cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          cache-bin: false
+          key: windows-experimental
+
+      - name: Run checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m unittest scripts.test_vendor_portable_pty
+          cargo fmt --check
+          cargo clippy --bin herdr --locked --target x86_64-pc-windows-msvc -- -D warnings
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr windows_
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr raw_input::tests
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr client::input
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr host_color
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr pane::cursor::tests
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr cursor_color
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr terminal_restore_postlude
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr host_theme_update_preserves_cursor
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr host_terminal_theme_restore_probe
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr restore_host_terminal_theme
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr render_ansi::tests
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr app_theme_
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr client_input_events_roundtrip
+          cargo build --locked --target x86_64-pc-windows-msvc
+
+      - name: Smoke system ConPTY fallback
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug\herdr.exe"
+          .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-system-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Smoke app-local ConPTY
+        shell: pwsh
+        run: |
+          $exeDir = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug"
+          $exe = Join-Path $exeDir "herdr.exe"
+          .\scripts\prepare_windows_conpty.ps1 -Destination $exeDir -Architecture x64
+          .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -ExpectedHostPath (Join-Path $exeDir "x64\OpenConsole.exe") -Session "ci-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Build release
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Package experimental artifact
+        shell: pwsh
+        run: |
+          $artifact = Join-Path $PWD "artifact\herdr-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $artifact | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\herdr.exe (Join-Path $artifact "herdr.exe")
+          .\scripts\prepare_windows_conpty.ps1 -Destination $artifact -Architecture x64
+          Get-ChildItem -LiteralPath $artifact -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $relative = [IO.Path]::GetRelativePath($artifact, $_.FullName).Replace('\', '/')
+            "$hash  $relative"
+          } | Set-Content -LiteralPath (Join-Path $artifact "SHA256SUMS.txt") -Encoding ascii
+
+      - name: Smoke packaged release executable
+        shell: pwsh
+        run: |
+          $artifact = Join-Path $PWD "artifact\herdr-windows-x86_64"
+          $version = & (Join-Path $artifact "herdr.exe") --version
+          if (-not $version.Contains("experimental.$env:GITHUB_SHA")) {
+            throw "Experimental build identity missing from packaged executable: $version"
+          }
+          .\scripts\windows_smoke_conpty_path.ps1 -ExePath (Join-Path $artifact "herdr.exe") -ExpectedHostPath (Join-Path $artifact "x64\OpenConsole.exe") -Session "ci-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Upload experimental artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: herdr-windows-x86_64
+          path: artifact/herdr-windows-x86_64
+          if-no-files-found: error
+          retention-days: 14

@@ -16,6 +16,9 @@ env:
   RUST_TOOLCHAIN_VERSION: 1.96.1
   WINDOWS_TARGET: x86_64-pc-windows-msvc
   ARTIFACT_NAME: herdr-windows-x86_64
+  CONPTY_VERSION: 1.24.260710001
+  CONPTY_SHA256: 175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   sync:
@@ -28,6 +31,7 @@ jobs:
       sha: ${{ steps.sync.outputs.sha }}
       upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
       changed: ${{ steps.sync.outputs.changed }}
+      release_exists: ${{ steps.sync.outputs.release_exists }}
     steps:
       - name: Resolve and merge upstream
         id: sync
@@ -59,11 +63,37 @@ jobs:
           if [[ "$before_sha" != "$after_sha" ]]; then
             changed=true
           fi
+          release_tag="windows-nightly-${after_sha:0:12}-conpty-${CONPTY_VERSION}"
+          release_exists=false
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          release_json="$(jq -c --arg tag "$release_tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
+          if [[ -n "$release_json" ]]; then
+            release_draft="$(jq -r .draft <<<"$release_json")"
+            if [[ "$release_draft" == "true" ]]; then
+              release_target="$(jq -r .target_commitish <<<"$release_json")"
+              if [[ "$release_target" != "$after_sha" ]]; then
+                echo "Existing draft ${release_tag} targets ${release_target}, expected ${after_sha}." >&2
+                exit 1
+              fi
+              echo "Found interrupted draft ${release_tag}; it will be repaired."
+            else
+              tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+              release_prerelease="$(jq -r .prerelease <<<"$release_json")"
+              asset_count="$(jq '.assets | length' <<<"$release_json")"
+              expected_assets="$(jq '[.assets[] | select(.name == "herdr-windows-x86_64.zip" or .name == "herdr-windows-x86_64.zip.sha256") | select(.digest | startswith("sha256:"))] | length' <<<"$release_json")"
+              if [[ "$tag_sha" != "$after_sha" || "$release_prerelease" != "true" || "$asset_count" != "2" || "$expected_assets" != "2" ]]; then
+                echo "Existing release ${release_tag} failed release verification." >&2
+                exit 1
+              fi
+              release_exists=true
+            fi
+          fi
 
           {
             echo "sha=${after_sha}"
             echo "upstream_sha=${upstream_sha}"
             echo "changed=${changed}"
+            echo "release_exists=${release_exists}"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -71,11 +101,13 @@ jobs:
             echo "- Upstream: \`${upstream_sha}\`"
             echo "- Fork branch: \`${after_sha}\`"
             echo "- Branch changed: \`${changed}\`"
+            echo "- Pinned release exists: \`${release_exists}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Test and package Windows build
     needs: sync
+    if: needs.sync.outputs.release_exists != 'true' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 35
     permissions:
@@ -86,6 +118,9 @@ jobs:
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.sha }}
       UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+      HERDR_BUILD_CHANNEL: nightly
+      HERDR_BUILD_ID: ${{ needs.sync.outputs.sha }}
+      HERDR_BUILD_COMMIT: ${{ needs.sync.outputs.sha }}
     steps:
       - name: Checkout immutable fork commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -115,16 +150,17 @@ jobs:
       - name: Test portable ConPTY preparation
         run: python -m unittest scripts.test_vendor_portable_pty
 
-      - name: Resolve latest Microsoft ConPTY package
+      - name: Verify pinned Microsoft ConPTY package
         id: conpty
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $package = .\scripts\resolve_latest_windows_conpty.ps1 -IncludePrerelease
+          $package = .\scripts\resolve_latest_windows_conpty.ps1 -PackageVersion $env:CONPTY_VERSION
+          if ($package.Sha256 -ne $env:CONPTY_SHA256) {
+            throw "Pinned ConPTY hash mismatch: expected $env:CONPTY_SHA256, got $($package.Sha256)"
+          }
           "version=$($package.Version)" >> $env:GITHUB_OUTPUT
           "sha256=$($package.Sha256)" >> $env:GITHUB_OUTPUT
-          "CONPTY_VERSION=$($package.Version)" >> $env:GITHUB_ENV
-          "CONPTY_SHA256=$($package.Sha256)" >> $env:GITHUB_ENV
           @(
             "### Microsoft ConPTY"
             "- Version: ``$($package.Version)``"
@@ -138,20 +174,24 @@ jobs:
       - name: Lint
         run: cargo clippy --bin herdr --locked --target ${{ env.WINDOWS_TARGET }} -- -D warnings
 
-      - name: Test Windows behavior
-        run: cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr windows_
-
-      - name: Test host-color parsing
-        run: cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_color
-
-      - name: Test automatic theme selection
-        run: cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr app_theme_
-
-      - name: Test cursor rendering
-        run: cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr render_ansi::tests
-
-      - name: Test input protocol round trips
-        run: cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client_input_events_roundtrip
+      - name: Test Windows build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr windows_
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr raw_input::tests
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client::input
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_color
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr pane::cursor::tests
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr cursor_color
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr terminal_restore_postlude
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_theme_update_preserves_cursor
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_terminal_theme_restore_probe
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr restore_host_terminal_theme
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr render_ansi::tests
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr app_theme_
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client_input_events_roundtrip
 
       - name: Build debug executable
         run: cargo build --locked --target ${{ env.WINDOWS_TARGET }}
@@ -170,7 +210,7 @@ jobs:
           $exeDir = Join-Path $PWD "target\${{ env.WINDOWS_TARGET }}\debug"
           $exe = Join-Path $exeDir "herdr.exe"
           .\scripts\prepare_windows_conpty.ps1 -Destination $exeDir -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
-          .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -ExpectedHostPath (Join-Path $exeDir "OpenConsole.exe") -Session "nightly-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -ExpectedHostPath (Join-Path $exeDir "x64\OpenConsole.exe") -Session "nightly-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Build release executable
         run: cargo build --release --locked --target ${{ env.WINDOWS_TARGET }}
@@ -192,15 +232,26 @@ jobs:
             "ConPTY package SHA-256: $env:CONPTY_SHA256"
           ) | Set-Content -LiteralPath (Join-Path $package "BUILD_SOURCE.txt") -Encoding ascii
 
-          Get-ChildItem -LiteralPath $package -File | Sort-Object Name | ForEach-Object {
+          Get-ChildItem -LiteralPath $package -Recurse -File | Sort-Object FullName | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
+            $relative = [IO.Path]::GetRelativePath($package, $_.FullName).Replace('\', '/')
+            "$hash  $relative"
           } | Set-Content -LiteralPath (Join-Path $package "SHA256SUMS.txt") -Encoding ascii
 
           $zip = Join-Path $artifactRoot "$($env:ARTIFACT_NAME).zip"
           Compress-Archive -Path (Join-Path $package "*") -DestinationPath $zip -CompressionLevel Optimal
           $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$zipHash  $([IO.Path]::GetFileName($zip))" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
+
+      - name: Smoke-test packaged release executable
+        shell: pwsh
+        run: |
+          $package = Join-Path $PWD "artifact\$env:ARTIFACT_NAME"
+          $version = & (Join-Path $package "herdr.exe") --version
+          if (-not $version.Contains("nightly.$env:SOURCE_SHA")) {
+            throw "Nightly build identity missing from packaged executable: $version"
+          }
+          .\scripts\windows_smoke_conpty_path.ps1 -ExePath (Join-Path $package "herdr.exe") -ExpectedHostPath (Join-Path $package "x64\OpenConsole.exe") -Session "nightly-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Upload tested package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -219,14 +270,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: read
       contents: write
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.sha }}
       UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
       CONPTY_VERSION: ${{ needs.build.outputs.conpty_version }}
       CONPTY_SHA256: ${{ needs.build.outputs.conpty_sha256 }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Download tested package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -234,8 +283,10 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: release-assets
 
-      - name: Create or repair commit-specific prerelease
+      - name: Create or verify commit-specific prerelease
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -248,6 +299,9 @@ jobs:
 
           test -f "$zip"
           test -f "$checksum"
+          (cd release-assets && sha256sum --check "$(basename "$checksum")")
+          zip_digest="sha256:$(sha256sum "$zip" | awk '{print $1}')"
+          checksum_digest="sha256:$(sha256sum "$checksum" | awk '{print $1}')"
 
           printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s' \
             "Automated Windows prerelease." \
@@ -258,33 +312,60 @@ jobs:
             "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             "The ZIP bundles herdr.exe, the signature-verified app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable."
 
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          verify_release() {
             tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
             if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
               echo "Existing tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
               exit 1
             fi
-            gh release upload "$tag" "$zip" "$checksum" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit "$tag" --title "$title" --notes "$notes" --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
+
+            release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
+            is_draft="$(jq -r .draft <<<"$release_json")"
+            is_prerelease="$(jq -r .prerelease <<<"$release_json")"
+            asset_count="$(jq '.assets | length' <<<"$release_json")"
+            published_zip_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip") | .digest' <<<"$release_json")"
+            published_checksum_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip.sha256") | .digest' <<<"$release_json")"
+            if [[ "$is_draft" != "false" || "$is_prerelease" != "true" || "$asset_count" != "2" || "$published_zip_digest" != "$zip_digest" || "$published_checksum_digest" != "$checksum_digest" ]]; then
+              echo "Existing release is incomplete or differs from this tested build." >&2
+              exit 1
+            fi
+          }
+
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          existing_release="$(jq -c --arg tag "$tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
+          if [[ -n "$existing_release" ]]; then
+            release_draft="$(jq -r .draft <<<"$existing_release")"
+            if [[ "$release_draft" == "true" ]]; then
+              release_target="$(jq -r .target_commitish <<<"$existing_release")"
+              if [[ "$release_target" != "$SOURCE_SHA" ]]; then
+                echo "Existing draft ${tag} targets ${release_target}, expected ${SOURCE_SHA}." >&2
+                exit 1
+              fi
+              gh release upload "$tag" "$zip" "$checksum" --clobber --repo "$GITHUB_REPOSITORY"
+              gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
+            fi
           else
-            gh release create "$tag" "$zip" "$checksum" \
+            if tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha 2>/dev/null)" && [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+              echo "Existing tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
+              exit 1
+            fi
+            gh release create "$tag" \
               --target "$SOURCE_SHA" \
               --title "$title" \
               --notes "$notes" \
+              --draft \
               --prerelease \
               --latest=false \
               --repo "$GITHUB_REPOSITORY"
+            gh release upload "$tag" "$zip" "$checksum" --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
           fi
+          verify_release
 
           release_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
-          asset_count="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[] | select(.name == "herdr-windows-x86_64.zip" or .name == "herdr-windows-x86_64.zip.sha256")] | length')"
-          if [[ "$asset_count" != "2" ]]; then
-            echo "Release asset verification failed." >&2
-            exit 1
-          fi
 
           {
-            echo "### Published prerelease"
+            echo "### Published or verified prerelease"
             echo "- Tag: \`${tag}\`"
             echo "- Source: \`${SOURCE_SHA}\`"
             echo "- ConPTY: \`${CONPTY_VERSION}\`"

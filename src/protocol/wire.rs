@@ -127,6 +127,11 @@ pub enum ClientInputEvent {
     },
     FocusGained,
     FocusLost,
+    HostDefaultColor {
+        kind: crate::terminal_theme::DefaultColorKind,
+        color: crate::terminal_theme::RgbColor,
+    },
+    HostColorSchemeChanged(crate::terminal_theme::HostAppearance),
 }
 
 impl ClientKeyKind {
@@ -299,6 +304,15 @@ impl ClientInputEvent {
             Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
             Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
             Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
+            Self::HostDefaultColor { kind, color } => {
+                crate::raw_input::RawInputEvent::HostDefaultColor {
+                    kind: *kind,
+                    color: *color,
+                }
+            }
+            Self::HostColorSchemeChanged(appearance) => {
+                crate::raw_input::RawInputEvent::HostColorSchemeChanged(*appearance)
+            }
         }
     }
 }
@@ -453,6 +467,9 @@ pub struct CursorState {
     /// Cursor shape as a DECSCUSR parameter.
     #[serde(default)]
     pub shape: CursorShapeParam,
+    /// Explicit application cursor color. None means use the host default.
+    #[serde(default)]
+    pub color: Option<crate::terminal_theme::RgbColor>,
 }
 
 /// A rendered frame to be displayed by the client.
@@ -1065,6 +1082,17 @@ mod tests {
                     row: 4,
                     modifiers: 0,
                 },
+                ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Background,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                    },
+                },
+                ClientInputEvent::HostColorSchemeChanged(
+                    crate::terminal_theme::HostAppearance::Dark,
+                ),
             ],
         };
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
@@ -1104,6 +1132,23 @@ mod tests {
             }
             other => panic!("expected backspace key event, got {other:?}"),
         }
+
+        let background = crate::terminal_theme::RgbColor {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+        };
+        assert!(matches!(
+            (ClientInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color: background,
+            })
+            .to_raw_input_event(),
+            crate::raw_input::RawInputEvent::HostDefaultColor {
+                kind: crate::terminal_theme::DefaultColorKind::Background,
+                color,
+            } if color == background
+        ));
     }
 
     #[test]
@@ -1298,6 +1343,11 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 6,
+                color: Some(crate::terminal_theme::RgbColor {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
             }),
             hyperlinks: vec!["https://example.com".to_owned()],
             graphics: Vec::new(),
@@ -1474,6 +1524,7 @@ mod tests {
                 y: 5,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1757,6 +1808,7 @@ mod tests {
             y: 0,
             visible: true,
             shape: 0,
+            color: None,
         };
         let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
 
