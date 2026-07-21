@@ -178,6 +178,7 @@ impl RawInputFramer {
         Self::events_from_chunks(self.byte_framer.flush_timeout())
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn flush_before_semantic_event(&mut self) -> Vec<RawInputEvent> {
         Self::events_from_chunks(self.byte_framer.flush_before_semantic_event())
     }
@@ -426,6 +427,7 @@ impl RawInputByteFramer {
         chunks
     }
 
+    #[cfg(any(windows, test))]
     fn flush_before_semantic_event(&mut self) -> Vec<Vec<u8>> {
         if self.buffer.as_slice() == [ESC] {
             self.host_color_replies_awaited = 0;
