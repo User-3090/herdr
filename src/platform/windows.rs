@@ -4,7 +4,10 @@ use std::{
     mem::{size_of, MaybeUninit},
     path::PathBuf,
     ptr::{copy_nonoverlapping, null_mut},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -34,7 +37,14 @@ use windows_sys::{
                 PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
             },
         },
-        UI::Shell::{CommandLineToArgvW, ShellExecuteW},
+        UI::{
+            Shell::{
+                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO,
+                NIF_TIP, NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+                NOTIFYICONDATAW,
+            },
+            WindowsAndMessaging::{LoadIconW, IDI_APPLICATION},
+        },
     },
 };
 
@@ -56,6 +66,7 @@ struct ProcessSnapshotCache {
 
 static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex<ProcessSnapshotCache> =
     Mutex::new(ProcessSnapshotCache { cached: None });
+static NEXT_NOTIFICATION_ICON_ID: AtomicU32 = AtomicU32::new(0x4845_0000);
 
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     true
@@ -666,8 +677,70 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     None
 }
 
-pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
-    Ok(false)
+pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
+    let hwnd = unsafe { GetConsoleWindow() };
+    if hwnd.is_null() {
+        return Ok(false);
+    }
+
+    let icon_id = NEXT_NOTIFICATION_ICON_ID.fetch_add(1, Ordering::Relaxed);
+    let mut notification = unsafe { std::mem::zeroed::<NOTIFYICONDATAW>() };
+    notification.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+    notification.hWnd = hwnd;
+    notification.uID = icon_id;
+    notification.hIcon = unsafe { LoadIconW(null_mut(), IDI_APPLICATION) };
+    notification.uFlags = NIF_TIP;
+    if !notification.hIcon.is_null() {
+        notification.uFlags |= NIF_ICON;
+    }
+    copy_wide_truncated(&mut notification.szTip, "Herdr");
+
+    if unsafe { Shell_NotifyIconW(NIM_ADD, &notification) } == 0 {
+        return Err(std::io::Error::other(
+            "failed to add Herdr notification-area icon",
+        ));
+    }
+
+    notification.uFlags = NIF_INFO;
+    notification.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
+    copy_wide_truncated(&mut notification.szInfoTitle, title);
+    copy_wide_truncated(&mut notification.szInfo, body.unwrap_or(title));
+    if unsafe { Shell_NotifyIconW(NIM_MODIFY, &notification) } == 0 {
+        unsafe {
+            Shell_NotifyIconW(NIM_DELETE, &notification);
+        }
+        return Err(std::io::Error::other(
+            "failed to show Herdr desktop notification",
+        ));
+    }
+
+    let hwnd_address = hwnd as usize;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(10));
+        let mut cleanup = unsafe { std::mem::zeroed::<NOTIFYICONDATAW>() };
+        cleanup.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+        cleanup.hWnd = hwnd_address as _;
+        cleanup.uID = icon_id;
+        unsafe {
+            Shell_NotifyIconW(NIM_DELETE, &cleanup);
+        }
+    });
+
+    Ok(true)
+}
+
+fn copy_wide_truncated<const N: usize>(destination: &mut [u16; N], value: &str) {
+    destination.fill(0);
+    let mut offset = 0;
+    for ch in value.chars() {
+        let mut units = [0; 2];
+        let encoded = ch.encode_utf16(&mut units);
+        if offset + encoded.len() >= N {
+            break;
+        }
+        destination[offset..offset + encoded.len()].copy_from_slice(encoded);
+        offset += encoded.len();
+    }
 }
 
 fn wide_null(value: &str) -> Vec<u16> {
@@ -798,6 +871,15 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn windows_notification_text_is_null_terminated_and_unicode_safe() {
+        let mut destination = [u16::MAX; 6];
+        super::copy_wide_truncated(&mut destination, "abc😀def");
+
+        assert_eq!(String::from_utf16(&destination[..5]).unwrap(), "abc😀");
+        assert_eq!(destination[5], 0);
+    }
 
     #[test]
     fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {

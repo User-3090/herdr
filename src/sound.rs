@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tracing::warn;
+#[cfg(windows)]
+use windows_sys::Win32::System::Console::Beep;
 
 const DISABLE_SOUND_ENV: &str = "HERDR_DISABLE_SOUND";
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -60,6 +62,11 @@ pub fn play(sound: Sound, config: &crate::config::SoundConfig) {
         };
 
         if let Err(err) = play_bytes(data) {
+            #[cfg(windows)]
+            if play_windows_fallback_tone(sound) {
+                warn!(sound = ?sound, err = %err, "MP3 playback failed; used Windows fallback tone");
+                return;
+            }
             warn!(sound = ?sound, err = %err, "sound playback failed");
         }
     });
@@ -157,6 +164,7 @@ fn run_windows_player(path: &Path) -> Result<Output, String> {
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-Sta",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
@@ -165,6 +173,20 @@ fn run_windows_player(path: &Path) -> Result<Output, String> {
         .arg(path)
         .output()
         .map_err(|e| format!("Windows MediaPlayer playback failed: {e}"))
+}
+
+#[cfg(any(windows, test))]
+fn windows_fallback_tone(sound: Sound) -> (u32, u32) {
+    match sound {
+        Sound::Done => (784, 180),
+        Sound::Request => (988, 260),
+    }
+}
+
+#[cfg(windows)]
+fn play_windows_fallback_tone(sound: Sound) -> bool {
+    let (frequency, duration_ms) = windows_fallback_tone(sound);
+    unsafe { Beep(frequency, duration_ms) != 0 }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -409,5 +431,13 @@ mod tests {
         assert!(script.contains("param([string]$Path)"));
         assert!(script.contains("Resolve-Path -LiteralPath $Path"));
         assert!(script.contains("System.Windows.Media.MediaPlayer"));
+    }
+
+    #[test]
+    fn windows_notification_fallback_tones_are_distinct() {
+        assert_ne!(
+            windows_fallback_tone(Sound::Done),
+            windows_fallback_tone(Sound::Request)
+        );
     }
 }
