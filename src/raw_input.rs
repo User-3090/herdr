@@ -2480,9 +2480,10 @@ mod tests {
         let mut framer = RawInputByteFramer::default();
         framer.host_color_query_sent();
 
-        let chunks =
-            framer.push(b"\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\");
-        assert_eq!(chunks.len(), 2);
+        let chunks = framer.push(
+            b"\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\\x1b]12;rgb:aaaa/bbbb/cccc\x1b\\",
+        );
+        assert_eq!(chunks.len(), 3);
 
         // Window closed: a later lone Escape flushes immediately.
         assert!(framer.push(b"\x1b").is_empty());
