@@ -192,6 +192,7 @@ mod tests {
             y,
             visible,
             shape,
+            color: None,
         }
     }
 

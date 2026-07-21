@@ -263,6 +263,7 @@ fn parse_default_color_events(body: &[u8]) -> Vec<DefaultColorEvent> {
         b"12;?" => Some(DefaultColorEvent::Query(DefaultColorQuery::Cursor)),
         b"110" | b"110;" => Some(DefaultColorEvent::Reset(DefaultColorQuery::Foreground)),
         b"111" | b"111;" => Some(DefaultColorEvent::Reset(DefaultColorQuery::Background)),
+        b"112" | b"112;" => Some(DefaultColorEvent::Reset(DefaultColorQuery::Cursor)),
         _ => parse_palette_color_query(body),
     };
     if let Some(event) = single {
@@ -918,10 +919,19 @@ pub(super) fn restore_host_terminal_theme_if_needed(
         return false;
     }
 
+    let cursor_changed = core.child_cursor_color_changed;
     core.transient_default_color_owner_pgid = None;
     core.child_default_foreground_changed = false;
     core.child_default_background_changed = false;
+    core.child_cursor_color_changed = false;
     write_host_terminal_theme(&mut core.terminal, core.host_terminal_theme);
+    if cursor_changed {
+        write_host_default_color(
+            &mut core.terminal,
+            crate::terminal_theme::DefaultColorKind::Cursor,
+            None,
+        );
+    }
     info!(
         pane = pane_id.raw(),
         owner_pgid, "restored host terminal default colors after transient override"
@@ -1286,7 +1296,7 @@ mod tests {
         let mut tracker = DefaultColorEventTracker::default();
 
         tracker.observe(
-            b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x07\x1b]4;0;?\x07\x1b]10;rgb:11/22/33\x07\x1b]111\x07",
+            b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x07\x1b]4;0;?\x07\x1b]10;rgb:11/22/33\x07\x1b]111\x07\x1b]112\x07",
         );
 
         assert_eq!(
@@ -1298,6 +1308,7 @@ mod tests {
                 DefaultColorEvent::PaletteQuery(0),
                 DefaultColorEvent::Set(DefaultColorQuery::Foreground),
                 DefaultColorEvent::Reset(DefaultColorQuery::Background),
+                DefaultColorEvent::Reset(DefaultColorQuery::Cursor),
             ]
         );
     }

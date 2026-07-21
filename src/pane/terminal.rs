@@ -82,6 +82,8 @@ pub struct TerminalCursorState {
     pub visible: bool,
     /// DECSCUSR parameter (0–6). 0 means terminal default.
     pub shape: u8,
+    /// Explicit cursor color requested by the child through OSC 12.
+    pub color: Option<crate::terminal_theme::RgbColor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +163,7 @@ pub(crate) struct GhosttyPaneCore {
     pub default_color_event_tracker: DefaultColorEventTracker,
     pub child_default_foreground_changed: bool,
     pub child_default_background_changed: bool,
+    pub child_cursor_color_changed: bool,
     pub osc52_forwarder: Osc52Forwarder,
     pub osc_debug_tracker: OscDebugTracker,
     pub agent_osc_state: AgentOscStateTracker,
@@ -915,6 +918,7 @@ impl GhosttyPaneTerminal {
                 default_color_event_tracker: DefaultColorEventTracker::default(),
                 child_default_foreground_changed: false,
                 child_default_background_changed: false,
+                child_cursor_color_changed: false,
                 osc52_forwarder: Osc52Forwarder::default(),
                 osc_debug_tracker: OscDebugTracker::default(),
                 agent_osc_state: AgentOscStateTracker::default(),
@@ -1238,7 +1242,10 @@ impl GhosttyPaneTerminal {
             terminal_responses.extend(libghostty_responses);
         }
 
-        if !core.child_default_foreground_changed && !core.child_default_background_changed {
+        if !core.child_default_foreground_changed
+            && !core.child_default_background_changed
+            && !core.child_cursor_color_changed
+        {
             core.transient_default_color_owner_pgid = None;
         }
     }
@@ -1764,6 +1771,7 @@ impl GhosttyPaneTerminal {
         let host_theme = core.host_terminal_theme;
         let initial_default_foreground = core.initial_default_foreground;
         let initial_default_background = core.initial_default_background;
+        let cursor_color = child_cursor_color(&core);
         let GhosttyPaneCore {
             terminal,
             render_state,
@@ -1853,7 +1861,8 @@ impl GhosttyPaneTerminal {
 
         ghostty_clear_render_dirty(render_state, area.height);
 
-        let current_cursor = cursor_state_from_render_state(render_state, decscusr_tracker);
+        let current_cursor =
+            cursor_state_from_render_state(render_state, decscusr_tracker, cursor_color);
         if show_cursor {
             if let Some(cursor) =
                 effective_cursor_state(&mut core, current_cursor).filter(|cursor| cursor.visible)
@@ -1927,7 +1936,15 @@ fn render_delay_after_pty_write(
     }
 }
 
+fn child_cursor_color(core: &GhosttyPaneCore) -> Option<crate::terminal_theme::RgbColor> {
+    core.child_cursor_color_changed
+        .then(|| core.terminal.effective_cursor_color().ok().flatten())
+        .flatten()
+        .map(terminal_theme_color)
+}
+
 fn current_cursor_state(core: &mut GhosttyPaneCore) -> Option<TerminalCursorState> {
+    let cursor_color = child_cursor_color(core);
     let GhosttyPaneCore {
         terminal,
         render_state,
@@ -1935,12 +1952,13 @@ fn current_cursor_state(core: &mut GhosttyPaneCore) -> Option<TerminalCursorStat
         ..
     } = core;
     render_state.update(terminal).ok()?;
-    cursor_state_from_render_state(render_state, decscusr_tracker)
+    cursor_state_from_render_state(render_state, decscusr_tracker, cursor_color)
 }
 
 fn cursor_state_from_render_state(
     render_state: &mut crate::ghostty::RenderState,
     decscusr_tracker: &DecscusrTracker,
+    color: Option<crate::terminal_theme::RgbColor>,
 ) -> Option<TerminalCursorState> {
     let cursor = render_state.cursor_viewport().ok()??;
     let shape = if decscusr_tracker.cursor_shape_overridden() {
@@ -1958,6 +1976,7 @@ fn cursor_state_from_render_state(
         y: cursor.y,
         visible: render_state.cursor_visible().ok()?,
         shape,
+        color,
     })
 }
 
@@ -2802,7 +2821,7 @@ fn mark_child_default_color_changed(
     match query {
         DefaultColorQuery::Foreground => core.child_default_foreground_changed = changed,
         DefaultColorQuery::Background => core.child_default_background_changed = changed,
-        DefaultColorQuery::Cursor => {}
+        DefaultColorQuery::Cursor => core.child_cursor_color_changed = changed,
     }
 }
 
@@ -5325,6 +5344,28 @@ mod tests {
             vec![Bytes::from_static(b"\x1b]12;rgb:1111/2222/3333\x1b\\")]
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn host_color_child_cursor_override_is_exposed_until_reset() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+
+        assert_eq!(pane.cursor_state().unwrap().color, None);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b]12;#112233\x07", &tx);
+        assert_eq!(
+            pane.cursor_state().unwrap().color,
+            Some(crate::terminal_theme::RgbColor {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+            })
+        );
+
+        pane.process_pty_bytes(pane_id, 0, b"\x1b]112\x07", &tx);
+        assert_eq!(pane.cursor_state().unwrap().color, None);
     }
 
     #[test]

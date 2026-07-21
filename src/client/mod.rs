@@ -455,8 +455,8 @@ fn write_terminal_restore_postlude(
             crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
         )?;
     }
-    // Restore a visible cursor and reset DECSCUSR back to the terminal default.
-    writer.write_all(b"\x1b[?25h\x1b[0 q")?;
+    // Restore cursor color, visibility, and DECSCUSR to terminal defaults.
+    writer.write_all(b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q")?;
     writer.flush()
 }
 
@@ -2491,7 +2491,7 @@ mod tests {
     fn terminal_restore_postlude_restores_visible_default_cursor() {
         let mut output = Vec::new();
         write_terminal_restore_postlude(&mut output, false).unwrap();
-        assert_eq!(output, b"\x1b[?25h\x1b[0 q");
+        assert_eq!(output, b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q");
     }
 
     #[test]
@@ -2503,7 +2503,7 @@ mod tests {
         expected.extend_from_slice(
             crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
         );
-        expected.extend_from_slice(b"\x1b[?25h\x1b[0 q");
+        expected.extend_from_slice(b"\x1b]112\x1b\\\x1b[?25h\x1b[0 q");
         assert_eq!(output, expected);
     }
 

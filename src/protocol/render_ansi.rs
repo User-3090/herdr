@@ -21,6 +21,7 @@
 //! - `CSI m` (SGR) — set graphic rendition (colors, bold, etc.)
 //! - `CSI ? 2026 h/l` — begin/end synchronized output
 //! - `CSI Ps SP q` — DECSCUSR cursor shape
+//! - `ESC ] 12 ; <color> ST` / `ESC ] 112 ST` — set/reset cursor color
 //! - `ESC ] 52 ; c ; <base64> BEL` — OSC 52 clipboard write
 //!
 //! The goal is minimal output: skip unchanged cells, batch adjacent changes,
@@ -43,6 +44,7 @@ pub(crate) struct EncodedBlit {
     pub(crate) full: bool,
     next_last_visible_cursor: Option<(u16, u16)>,
     next_last_cursor_shape: u8,
+    next_last_cursor_color: Option<crate::terminal_theme::RgbColor>,
 }
 
 /// Stateful encoder that diffs semantic frames into terminal ANSI bytes.
@@ -51,6 +53,7 @@ pub(crate) struct BlitEncoder {
     last_frame: Option<FrameData>,
     last_visible_cursor: Option<(u16, u16)>,
     last_cursor_shape: u8,
+    last_cursor_color: Option<crate::terminal_theme::RgbColor>,
 }
 
 impl BlitEncoder {
@@ -90,6 +93,11 @@ impl BlitEncoder {
         let mut bytes = Vec::new();
         let mut next_last_visible_cursor = self.last_visible_cursor;
         let mut next_last_cursor_shape = self.last_cursor_shape;
+        let next_last_cursor_color = if suppress_visible_cursor {
+            None
+        } else {
+            frame.cursor.as_ref().and_then(|cursor| cursor.color)
+        };
         blit_frame_to_with_cursor_memory(
             &mut bytes,
             frame,
@@ -98,6 +106,9 @@ impl BlitEncoder {
             &mut next_last_cursor_shape,
             suppress_visible_cursor,
         );
+        if next_last_cursor_color != self.last_cursor_color {
+            insert_cursor_color_change(&mut bytes, next_last_cursor_color);
+        }
         if let Some(stats) = prof_stats {
             crate::render_prof::duration_since("ansi_encode.total", prof_started);
             crate::render_prof::counter("ansi_encode.bytes", bytes.len() as u64);
@@ -115,12 +126,14 @@ impl BlitEncoder {
             full,
             next_last_visible_cursor,
             next_last_cursor_shape,
+            next_last_cursor_color,
         }
     }
 
     pub(crate) fn commit(&mut self, frame: FrameData, encoded: EncodedBlit) {
         self.last_visible_cursor = encoded.next_last_visible_cursor;
         self.last_cursor_shape = encoded.next_last_cursor_shape;
+        self.last_cursor_color = encoded.next_last_cursor_color;
         self.last_frame = Some(frame);
     }
 
@@ -135,9 +148,10 @@ impl BlitEncoder {
 
 pub(crate) fn frame_with_drawn_cursor(
     mut frame: FrameData,
-    cursor_color: Option<crate::terminal_theme::RgbColor>,
+    host_cursor_color: Option<crate::terminal_theme::RgbColor>,
 ) -> FrameData {
     if let Some(cursor) = frame.cursor.as_ref().filter(|cursor| cursor.visible) {
+        let cursor_color = cursor.color.or(host_cursor_color);
         let (x, y) = clamp_cursor_position(&frame, cursor.x, cursor.y);
         let idx = (y as usize)
             .saturating_mul(frame.width as usize)
@@ -153,6 +167,29 @@ pub(crate) fn frame_with_drawn_cursor(
         }
     }
     frame
+}
+
+const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
+
+fn insert_cursor_color_change(
+    bytes: &mut Vec<u8>,
+    color: Option<crate::terminal_theme::RgbColor>,
+) {
+    let sequence = match color {
+        Some(color) => crate::terminal_theme::osc_set_default_color_sequence(
+            crate::terminal_theme::DefaultColorKind::Cursor,
+            color,
+        ),
+        None => crate::terminal_theme::osc_reset_default_color_sequence(
+            crate::terminal_theme::DefaultColorKind::Cursor,
+        )
+        .to_owned(),
+    };
+    let insert_at = bytes
+        .windows(SYNC_OUTPUT_END.len())
+        .rposition(|window| window == SYNC_OUTPUT_END)
+        .unwrap_or(bytes.len());
+    bytes.splice(insert_at..insert_at, sequence.bytes());
 }
 
 fn drawn_cursor_colors(
@@ -1073,6 +1110,7 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1140,6 +1178,7 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1180,6 +1219,7 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1220,6 +1260,7 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 6,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1257,6 +1298,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1280,6 +1322,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1303,6 +1346,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 2,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1323,6 +1367,80 @@ mod tests {
     }
 
     #[test]
+    fn drawn_cursor_prefers_child_color_over_host_fallback() {
+        let frame = FrameData {
+            cells: vec![make_cell("A", 0, 0x02_f0_f0_f0, 0)],
+            width: 1,
+            height: 1,
+            cursor: Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 2,
+                color: Some(crate::terminal_theme::RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                }),
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let drawn = frame_with_drawn_cursor(
+            frame,
+            Some(crate::terminal_theme::RgbColor {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+            }),
+        );
+
+        assert_eq!(drawn.cells[0].fg, 0x00_00_00_10);
+        assert_eq!(drawn.cells[0].bg, 0x02_11_22_33);
+        let encoded = BlitEncoder::new().encode_with_suppressed_visible_cursor(&drawn, false);
+        assert!(!encoded.bytes.windows(5).any(|window| window == b"\x1b]12;"));
+        assert!(!encoded.bytes.windows(6).any(|window| window == b"\x1b]112"));
+    }
+
+    #[test]
+    fn native_cursor_color_tracks_child_override_and_reset() {
+        let mut frame = FrameData {
+            cells: vec![make_cell("A", 0, 0, 0)],
+            width: 1,
+            height: 1,
+            cursor: Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 0,
+                color: Some(crate::terminal_theme::RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                }),
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+        let mut encoder = BlitEncoder::new();
+
+        let encoded = encoder.encode(&frame, false);
+        assert!(encoded
+            .bytes
+            .windows(b"\x1b]12;rgb:11/22/33\x1b\\".len())
+            .any(|window| window == b"\x1b]12;rgb:11/22/33\x1b\\"));
+        encoder.commit(frame.clone(), encoded);
+
+        frame.cursor.as_mut().unwrap().color = None;
+        let encoded = encoder.encode(&frame, false);
+        assert!(encoded
+            .bytes
+            .windows(b"\x1b]112\x1b\\".len())
+            .any(|window| window == b"\x1b]112\x1b\\"));
+    }
+
+    #[test]
     fn drawn_cursor_ignores_hidden_cursor() {
         let frame = FrameData {
             cells: vec![make_cell("A", 0, 0, 0)],
@@ -1333,6 +1451,7 @@ mod tests {
                 y: 0,
                 visible: false,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1352,6 +1471,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 6,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1399,6 +1519,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1412,6 +1533,7 @@ mod tests {
                 y: 1,
                 visible: false,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1632,6 +1754,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1658,6 +1781,7 @@ mod tests {
                 y: 0,
                 visible: false,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1706,6 +1830,7 @@ mod tests {
                 y: 0,
                 visible: false,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1728,6 +1853,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1757,6 +1883,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1768,6 +1895,7 @@ mod tests {
             y: 2,
             visible: true,
             shape: 0,
+            color: None,
         });
 
         let mut output = Vec::new();
@@ -1797,6 +1925,7 @@ mod tests {
                 y: 1,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1882,6 +2011,7 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),

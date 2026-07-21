@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -467,6 +467,9 @@ pub struct CursorState {
     /// Cursor shape as a DECSCUSR parameter.
     #[serde(default)]
     pub shape: CursorShapeParam,
+    /// Explicit application cursor color. None means use the host default.
+    #[serde(default)]
+    pub color: Option<crate::terminal_theme::RgbColor>,
 }
 
 /// A rendered frame to be displayed by the client.
@@ -1340,6 +1343,11 @@ mod tests {
                 y: 0,
                 visible: true,
                 shape: 6,
+                color: Some(crate::terminal_theme::RgbColor {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                }),
             }),
             hyperlinks: vec!["https://example.com".to_owned()],
             graphics: Vec::new(),
@@ -1516,6 +1524,7 @@ mod tests {
                 y: 5,
                 visible: true,
                 shape: 0,
+                color: None,
             }),
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
@@ -1799,6 +1808,7 @@ mod tests {
             y: 0,
             visible: true,
             shape: 0,
+            color: None,
         };
         let frame = FrameData::from_ratatui_buffer(&buffer, Some(cursor.clone()));
 
