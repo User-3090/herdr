@@ -1818,33 +1818,31 @@ mod tests {
                     false,
                     Some(&shell_job(7)),
                 ));
-                assert_eq!(
-                    core.child_default_foreground_changed,
-                    foreground_pending
-                );
-                assert_eq!(
-                    core.child_default_background_changed,
-                    background_pending
-                );
+                assert_eq!(core.child_default_foreground_changed, foreground_pending);
+                assert_eq!(core.child_default_background_changed, background_pending);
                 assert_eq!(core.transient_default_color_owner_pgid, Some(42));
             }
 
             let effective_theme = pane_default_theme(&pane);
             assert_eq!(
                 effective_theme.foreground,
-                host_theme.foreground.or(Some(crate::terminal_theme::RgbColor {
-                    r: 0x11,
-                    g: 0x22,
-                    b: 0x33,
-                }))
+                host_theme
+                    .foreground
+                    .or(Some(crate::terminal_theme::RgbColor {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                    }))
             );
             assert_eq!(
                 effective_theme.background,
-                host_theme.background.or(Some(crate::terminal_theme::RgbColor {
-                    r: 0x44,
-                    g: 0x55,
-                    b: 0x66,
-                }))
+                host_theme
+                    .background
+                    .or(Some(crate::terminal_theme::RgbColor {
+                        r: 0x44,
+                        g: 0x55,
+                        b: 0x66,
+                    }))
             );
         }
     }
