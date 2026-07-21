@@ -1,4 +1,4 @@
-name: Windows 10 nightly prerelease
+name: Windows nightly prerelease
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: windows10-nightly-prerelease
+  group: windows-nightly-prerelease
   cancel-in-progress: false
 
 env:
@@ -15,7 +15,7 @@ env:
   UPSTREAM_BRANCH: master
   RUST_TOOLCHAIN_VERSION: 1.96.1
   WINDOWS_TARGET: x86_64-pc-windows-msvc
-  ARTIFACT_NAME: herdr-windows10-x86_64
+  ARTIFACT_NAME: herdr-windows-x86_64
 
 jobs:
   sync:
@@ -110,7 +110,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           cache-bin: false
-          key: windows10-nightly
+          key: windows-nightly
 
       - name: Test portable ConPTY preparation
         run: python -m unittest scripts.test_vendor_portable_pty
@@ -240,9 +240,9 @@ jobs:
           set -euo pipefail
 
           short_sha="${SOURCE_SHA:0:12}"
-          tag="windows10-nightly-${short_sha}-conpty-${CONPTY_VERSION}"
+          tag="windows-nightly-${short_sha}-conpty-${CONPTY_VERSION}"
           date_utc="$(date -u +%Y-%m-%d)"
-          title="Herdr Windows 10 nightly ${date_utc} (${short_sha}, ConPTY ${CONPTY_VERSION})"
+          title="Herdr Windows nightly ${date_utc} (${short_sha}, ConPTY ${CONPTY_VERSION})"
           zip="release-assets/${ARTIFACT_NAME}.zip"
           checksum="${zip}.sha256"
 
@@ -250,14 +250,14 @@ jobs:
           test -f "$checksum"
 
           printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n\n%s' \
-            "Automated experimental Windows 10 prerelease." \
+            "Automated Windows prerelease." \
             "Fork commit: ${SOURCE_SHA}" \
             "Upstream commit included: ${UPSTREAM_SHA}" \
             "Microsoft ConPTY package: ${CONPTY_VERSION}" \
             "Microsoft ConPTY package SHA-256: ${CONPTY_SHA256}" \
             "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             "The ZIP bundles herdr.exe, the signature-verified app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable." \
-            "Windows 10 runtime validation is still required for the open mouse, modified Backspace/Delete, and clipboard-image reports."
+            "On-device Windows runtime validation is still required for the open mouse, modified Backspace/Delete, and clipboard-image reports."
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
@@ -278,7 +278,7 @@ jobs:
           fi
 
           release_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
-          asset_count="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[] | select(.name == "herdr-windows10-x86_64.zip" or .name == "herdr-windows10-x86_64.zip.sha256")] | length')"
+          asset_count="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[] | select(.name == "herdr-windows-x86_64.zip" or .name == "herdr-windows-x86_64.zip.sha256")] | length')"
           if [[ "$asset_count" != "2" ]]; then
             echo "Release asset verification failed." >&2
             exit 1
