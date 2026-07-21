@@ -5,7 +5,7 @@ use anyhow::{bail, ensure, Error};
 use filedescriptor::{FileDescriptor, OwnedHandle};
 use lazy_static::lazy_static;
 use shared_library::shared_library;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::Error as IoError;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
@@ -21,8 +21,6 @@ use winapi::um::winbase::{
 };
 use winapi::um::wincon::COORD;
 use winapi::um::winnt::HANDLE;
-use winreg::enums::HKEY_LOCAL_MACHINE;
-use winreg::RegKey;
 
 pub type HPCON = HANDLE;
 
@@ -31,58 +29,6 @@ pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x2;
 pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x4;
 #[allow(dead_code)]
 pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
-const WINDOWS_11_MIN_BUILD: u32 = 22_000;
-const CONPTY_BACKEND_ENV: &str = "HERDR_CONPTY_BACKEND";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConPtyBackend {
-    System,
-    Bundled,
-}
-
-fn conpty_backend_for(
-    override_value: Option<&OsStr>,
-    windows_build: Option<u32>,
-) -> ConPtyBackend {
-    if let Some(value) = override_value.and_then(OsStr::to_str).map(str::trim) {
-        if value.eq_ignore_ascii_case("system") {
-            return ConPtyBackend::System;
-        }
-        if value.eq_ignore_ascii_case("bundled") {
-            return ConPtyBackend::Bundled;
-        }
-        if !value.is_empty() {
-            log::warn!(
-                "ignoring invalid {CONPTY_BACKEND_ENV} value `{value}`; expected `system` or `bundled`"
-            );
-        }
-    }
-
-    if windows_build.is_some_and(|build| build >= WINDOWS_11_MIN_BUILD) {
-        ConPtyBackend::Bundled
-    } else {
-        // Modern app-local ConPTY preserves explicit black backgrounds emitted
-        // by old PSReadLine. Windows 10's system ConPTY retains the compatible
-        // default-background behavior users get outside Herdr.
-        ConPtyBackend::System
-    }
-}
-
-fn windows_build_number() -> Option<u32> {
-    let current_version = RegKey::predef(HKEY_LOCAL_MACHINE)
-        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion")
-        .ok()?;
-    let build: String = current_version.get_value("CurrentBuildNumber").ok()?;
-    build.parse().ok()
-}
-
-fn selected_conpty_backend() -> ConPtyBackend {
-    let override_value = std::env::var_os(CONPTY_BACKEND_ENV);
-    let windows_build = windows_build_number();
-    let backend = conpty_backend_for(override_value.as_deref(), windows_build);
-    log::info!("selected {backend:?} ConPTY backend for Windows build {windows_build:?}");
-    backend
-}
 
 shared_library!(ConPtyFuncs,
     pub fn CreatePseudoConsole(
@@ -102,9 +48,7 @@ fn load_conpty() -> ConPtyFuncs {
     let kernel = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
     );
-    if selected_conpty_backend() == ConPtyBackend::System {
-        return kernel;
-    }
+
     // Only load an app-local ConPTY that Herdr deliberately deployed beside
     // its executable. Never probe for a bare conpty.dll through the DLL search
     // path; that can select another application's incompatible package.
@@ -240,42 +184,5 @@ impl PsuedoCon {
         Ok(WinChild {
             proc: Mutex::new(proc),
         })
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn conpty_backend_defaults_to_system_on_windows_10() {
-        assert_eq!(
-            conpty_backend_for(None, Some(19_045)),
-            ConPtyBackend::System
-        );
-    }
-
-    #[test]
-    fn conpty_backend_defaults_to_bundled_on_windows_11() {
-        assert_eq!(
-            conpty_backend_for(None, Some(WINDOWS_11_MIN_BUILD)),
-            ConPtyBackend::Bundled
-        );
-    }
-
-    #[test]
-    fn conpty_backend_fails_safe_when_windows_build_is_unknown() {
-        assert_eq!(conpty_backend_for(None, None), ConPtyBackend::System);
-    }
-
-    #[test]
-    fn conpty_backend_honors_explicit_overrides() {
-        assert_eq!(
-            conpty_backend_for(Some(OsStr::new("bundled")), Some(19_045)),
-            ConPtyBackend::Bundled
-        );
-        assert_eq!(
-            conpty_backend_for(Some(OsStr::new("SYSTEM")), Some(26_100)),
-            ConPtyBackend::System
-        );
     }
 }
