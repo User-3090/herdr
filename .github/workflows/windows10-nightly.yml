@@ -80,6 +80,9 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: read
+    outputs:
+      conpty_version: ${{ steps.conpty.outputs.version }}
+      conpty_sha256: ${{ steps.conpty.outputs.sha256 }}
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.sha }}
       UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
@@ -111,6 +114,23 @@ jobs:
 
       - name: Test portable ConPTY preparation
         run: python -m unittest scripts.test_vendor_portable_pty
+
+      - name: Resolve latest Microsoft ConPTY package
+        id: conpty
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = .\scripts\resolve_latest_windows_conpty.ps1 -IncludePrerelease
+          "version=$($package.Version)" >> $env:GITHUB_OUTPUT
+          "sha256=$($package.Sha256)" >> $env:GITHUB_OUTPUT
+          "CONPTY_VERSION=$($package.Version)" >> $env:GITHUB_ENV
+          "CONPTY_SHA256=$($package.Sha256)" >> $env:GITHUB_ENV
+          @(
+            "### Microsoft ConPTY"
+            "- Version: ``$($package.Version)``"
+            "- SHA-256: ``$($package.Sha256)``"
+            "- Prerelease: ``$($package.IsPrerelease)``"
+          ) >> $env:GITHUB_STEP_SUMMARY
 
       - name: Check formatting
         run: cargo fmt --check
@@ -149,7 +169,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $exeDir = Join-Path $PWD "target\${{ env.WINDOWS_TARGET }}\debug"
           $exe = Join-Path $exeDir "herdr.exe"
-          .\scripts\prepare_windows_conpty.ps1 -Destination $exeDir -Architecture x64
+          .\scripts\prepare_windows_conpty.ps1 -Destination $exeDir -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -ExpectedHostPath (Join-Path $exeDir "OpenConsole.exe") -Session "nightly-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Build release executable
@@ -164,10 +184,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path $package | Out-Null
 
           Copy-Item "target\${{ env.WINDOWS_TARGET }}\release\herdr.exe" (Join-Path $package "herdr.exe")
-          .\scripts\prepare_windows_conpty.ps1 -Destination $package -Architecture x64
+          .\scripts\prepare_windows_conpty.ps1 -Destination $package -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
           @(
             "Fork commit: $env:SOURCE_SHA"
             "Upstream commit: $env:UPSTREAM_SHA"
+            "ConPTY package: $env:CONPTY_VERSION"
+            "ConPTY package SHA-256: $env:CONPTY_SHA256"
           ) | Set-Content -LiteralPath (Join-Path $package "BUILD_SOURCE.txt") -Encoding ascii
 
           Get-ChildItem -LiteralPath $package -File | Sort-Object Name | ForEach-Object {
@@ -202,6 +224,8 @@ jobs:
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.sha }}
       UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+      CONPTY_VERSION: ${{ needs.build.outputs.conpty_version }}
+      CONPTY_SHA256: ${{ needs.build.outputs.conpty_sha256 }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Download tested package
@@ -216,21 +240,23 @@ jobs:
           set -euo pipefail
 
           short_sha="${SOURCE_SHA:0:12}"
-          tag="windows10-nightly-${short_sha}"
+          tag="windows10-nightly-${short_sha}-conpty-${CONPTY_VERSION}"
           date_utc="$(date -u +%Y-%m-%d)"
-          title="Herdr Windows 10 nightly ${date_utc} (${short_sha})"
+          title="Herdr Windows 10 nightly ${date_utc} (${short_sha}, ConPTY ${CONPTY_VERSION})"
           zip="release-assets/${ARTIFACT_NAME}.zip"
           checksum="${zip}.sha256"
 
           test -f "$zip"
           test -f "$checksum"
 
-          printf -v notes '%s\n\n%s\n%s\n%s\n\n%s\n\n%s' \
+          printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n\n%s' \
             "Automated experimental Windows 10 prerelease." \
             "Fork commit: ${SOURCE_SHA}" \
             "Upstream commit included: ${UPSTREAM_SHA}" \
+            "Microsoft ConPTY package: ${CONPTY_VERSION}" \
+            "Microsoft ConPTY package SHA-256: ${CONPTY_SHA256}" \
             "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            "The ZIP bundles herdr.exe, the pinned app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable." \
+            "The ZIP bundles herdr.exe, the signature-verified app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable." \
             "Windows 10 runtime validation is still required for the open mouse, modified Backspace/Delete, and clipboard-image reports."
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -262,5 +288,6 @@ jobs:
             echo "### Published prerelease"
             echo "- Tag: \`${tag}\`"
             echo "- Source: \`${SOURCE_SHA}\`"
+            echo "- ConPTY: \`${CONPTY_VERSION}\`"
             echo "- Release: ${release_url}"
           } >> "$GITHUB_STEP_SUMMARY"
