@@ -225,18 +225,7 @@ jobs:
 
           Copy-Item "target\${{ env.WINDOWS_TARGET }}\release\herdr.exe" (Join-Path $package "herdr.exe")
           .\scripts\prepare_windows_conpty.ps1 -Destination $package -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
-          @(
-            "Fork commit: $env:SOURCE_SHA"
-            "Upstream commit: $env:UPSTREAM_SHA"
-            "ConPTY package: $env:CONPTY_VERSION"
-            "ConPTY package SHA-256: $env:CONPTY_SHA256"
-          ) | Set-Content -LiteralPath (Join-Path $package "BUILD_SOURCE.txt") -Encoding ascii
-
-          Get-ChildItem -LiteralPath $package -Recurse -File | Sort-Object FullName | ForEach-Object {
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            $relative = [IO.Path]::GetRelativePath($package, $_.FullName).Replace('\', '/')
-            "$hash  $relative"
-          } | Set-Content -LiteralPath (Join-Path $package "SHA256SUMS.txt") -Encoding ascii
+          Get-ChildItem -LiteralPath $package -Recurse -File -Filter "*.txt" | Remove-Item -Force
 
           $zip = Join-Path $artifactRoot "$($env:ARTIFACT_NAME).zip"
           Compress-Archive -Path (Join-Path $package "*") -DestinationPath $zip -CompressionLevel Optimal

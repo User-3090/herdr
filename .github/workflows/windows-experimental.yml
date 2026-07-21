@@ -94,11 +94,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
           Copy-Item target\x86_64-pc-windows-msvc\release\herdr.exe (Join-Path $artifact "herdr.exe")
           .\scripts\prepare_windows_conpty.ps1 -Destination $artifact -Architecture x64
-          Get-ChildItem -LiteralPath $artifact -Recurse -File | Sort-Object FullName | ForEach-Object {
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            $relative = [IO.Path]::GetRelativePath($artifact, $_.FullName).Replace('\', '/')
-            "$hash  $relative"
-          } | Set-Content -LiteralPath (Join-Path $artifact "SHA256SUMS.txt") -Encoding ascii
+          Get-ChildItem -LiteralPath $artifact -Recurse -File -Filter "*.txt" | Remove-Item -Force
 
       - name: Smoke packaged release executable
         shell: pwsh
