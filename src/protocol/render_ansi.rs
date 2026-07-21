@@ -171,10 +171,7 @@ pub(crate) fn frame_with_drawn_cursor(
 
 const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
 
-fn insert_cursor_color_change(
-    bytes: &mut Vec<u8>,
-    color: Option<crate::terminal_theme::RgbColor>,
-) {
+fn insert_cursor_color_change(bytes: &mut Vec<u8>, color: Option<crate::terminal_theme::RgbColor>) {
     let sequence = match color {
         Some(color) => crate::terminal_theme::osc_set_default_color_sequence(
             crate::terminal_theme::DefaultColorKind::Cursor,
