@@ -198,7 +198,7 @@ herdr pane read <pane_id> --source visible --ansi
 herdr pane read <pane_id> --source recent-unwrapped --lines 120
 ```
 
-`pane read` prints UTF-8 terminal text directly. ANSI escapes are stripped by default; use `--format ansi` or `--ansi` to preserve them where the source exposes styling. The `detection` source is always plain text. For every source, `--lines N` returns the last N logical lines. `agent read` uses the same output and line behavior.
+`pane read` prints UTF-8 terminal text directly. ANSI escapes are stripped by default; use `--format ansi` or `--ansi` to preserve them where the source exposes styling. The `detection` source is always plain text. For recent sources, `--lines N` selects the last N rendered terminal rows before optional unwrapping; without it, reads default to 80 rows. For `visible` and `detection`, omitting `--lines` returns the full snapshot, while specifying it keeps the last N newline-delimited lines. `agent read` uses the same output and line behavior.
 
 Send input:
 
@@ -346,7 +346,7 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 
 Use `pane wait-output` for normal commands and servers. Use `agent wait` for coding agents.
 
-`pane wait-output` checks the selected snapshot immediately, including output that already exists, then polls until it matches. The default source name is `recent`; matching treats it as unwrapped recent output with no line limit. `--match` finds a literal substring on one line; `--regex` uses Rust regular-expression syntax and also matches one line at a time. `--raw` keeps ANSI escape sequences instead of stripping them.
+`pane wait-output` checks the selected snapshot immediately, including output that already exists, then polls until it matches. The default source name is `recent`; matching treats it as unwrapped recent output from the latest 80 rendered terminal rows. `--lines` changes that row limit. `--match` finds a literal substring on one line, and `--regex` uses Rust regular-expression syntax and also matches one line at a time.
 
 `pane wait-output`, `agent wait`, and `agent prompt --wait` wait indefinitely when `--timeout` is omitted. A timeout or server error is emitted as JSON on stderr with exit status 1. CLI usage errors exit with status 2.
 

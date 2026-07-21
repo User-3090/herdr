@@ -159,6 +159,7 @@ export default defineConfig({
           items: [
             { label: 'How to work with Herdr', translations: { ja: 'Herdr での作業の進め方', 'zh-CN': '使用 Herdr 的工作方式' }, slug: 'docs/how-to-work' },
             { label: 'Agents', translations: { ja: 'エージェント', 'zh-CN': '智能体' }, slug: 'docs/agents' },
+            { label: 'Agent automation', translations: { ja: 'エージェント自動化', 'zh-CN': '智能体自动化' }, slug: 'docs/agent-automation' },
             { label: 'Session state and restore', translations: { ja: 'セッション状態と復元', 'zh-CN': '会话状态与恢复' }, slug: 'docs/session-state' },
             { label: 'Persistence and remote access', translations: { ja: '永続化とリモートアクセス', 'zh-CN': '持久化与远程访问' }, slug: 'docs/persistence-remote' },
           ],

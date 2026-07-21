@@ -191,7 +191,7 @@ herdr pane read <pane_id> --source visible --ansi
 herdr pane read <pane_id> --source recent-unwrapped --lines 120
 ```
 
-`pane read` は UTF-8 のターミナルテキストを直接出力します。デフォルトでは ANSI エスケープを除去し、ソースに装飾が含まれる場合は `--format ansi` または `--ansi` で保持します。`detection` ソースは常にプレーンテキストです。すべてのソースで `--lines N` は末尾の N 論理行を返します。`agent read` も同じ出力と行数の動作です。
+`pane read` は UTF-8 のターミナルテキストを直接出力します。デフォルトでは ANSI エスケープを除去し、ソースに装飾が含まれる場合は `--format ansi` または `--ansi` で保持します。`detection` ソースは常にプレーンテキストです。recent 系ソースでは、`--lines N` は折り返し解除の前に末尾の N 描画行を選び、省略時は 80 行です。`visible` と `detection` では、省略時にスナップショット全体を返し、指定時は改行で区切られた末尾 N 行を返します。`agent read` も同じ出力と行数の動作です。
 
 入力を送る:
 
@@ -320,7 +320,7 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 
 通常のコマンドやサーバーには `pane wait-output` を使います。コーディングエージェントには `agent wait` を使います。
 
-`pane wait-output` は選択したスナップショットを最初にすぐ検索するため、すでに存在する出力も一致します。デフォルトのソース名は `recent` で、マッチング時は行数制限なしの recent 折り返し前出力として扱われます。`--match` は 1 行内のリテラル部分文字列を検索し、`--regex` は Rust の正規表現構文で 1 行ずつ一致します。`--raw` は ANSI エスケープシーケンスを除去しません。
+`pane wait-output` は選択したスナップショットを最初にすぐ検索するため、すでに存在する出力も一致します。デフォルトのソース名は `recent` で、直近 80 行の描画済みターミナル行を折り返し前の出力として扱います。`--lines` でその行数を変更できます。`--match` は 1 行内のリテラル部分文字列を検索し、`--regex` は Rust の正規表現構文で 1 行ずつ一致します。
 
 `pane wait-output`、`agent wait`、`agent prompt --wait` は、`--timeout` を省略すると無期限に待ちます。タイムアウトまたはサーバーエラーは JSON として stderr に出力され、終了コード 1 になります。CLI 使用法のエラーは終了コード 2 です。
 

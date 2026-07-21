@@ -191,7 +191,7 @@ herdr pane read <pane_id> --source visible --ansi
 herdr pane read <pane_id> --source recent-unwrapped --lines 120
 ```
 
-`pane read` 直接打印 UTF-8 终端文本。默认去除 ANSI 转义;来源包含样式时,使用 `--format ansi` 或 `--ansi` 保留。`detection` 来源始终是纯文本。对所有来源,`--lines N` 都返回末尾 N 个逻辑行。`agent read` 使用相同的输出和行数行为。
+`pane read` 直接打印 UTF-8 终端文本。默认去除 ANSI 转义;来源包含样式时,使用 `--format ansi` 或 `--ansi` 保留。`detection` 来源始终是纯文本。对 recent 类来源,`--lines N` 会在可选的取消折行之前选择最后 N 个已渲染终端行;省略时默认读取 80 行。对 `visible` 和 `detection`,省略 `--lines` 会返回完整快照,指定时保留按换行分隔的最后 N 行。`agent read` 使用相同的输出和行数行为。
 
 发送输入:
 
@@ -320,7 +320,7 @@ herdr pane wait-output <pane_id> (--match <text> | --regex <pattern>) [--source 
 
 普通命令和服务器用 `pane wait-output`。编程智能体用 `agent wait`。
 
-`pane wait-output` 会立即检查所选快照,所以已经存在的输出也能匹配。默认来源名是 `recent`;匹配时会把它作为不限制行数的 recent 未折行输出。`--match` 在单行中查找字面子串;`--regex` 使用 Rust 正则表达式语法并逐行匹配。`--raw` 保留 ANSI 转义序列。
+`pane wait-output` 会立即检查所选快照,所以已经存在的输出也能匹配。默认来源名是 `recent`;匹配时会把最近 80 个已渲染终端行作为未折行输出处理。`--lines` 可以修改这个行数限制。`--match` 在单行中查找字面子串;`--regex` 使用 Rust 正则表达式语法并逐行匹配。
 
 `pane wait-output`、`agent wait` 和 `agent prompt --wait` 在省略 `--timeout` 时会无限等待。超时或服务器错误以 JSON 写到 stderr,退出状态为 1。CLI 用法错误的退出状态为 2。
 

@@ -566,6 +566,12 @@
           "description": "Maximum sidebar width (columns) when expanded."
         },
         {
+          "key": "ui.sidebar_start_collapsed",
+          "type": "boolean",
+          "default": "false",
+          "description": "Start Herdr with the sidebar collapsed. Changes take effect on the next launch."
+        },
+        {
           "key": "ui.sidebar_collapsed_mode",
           "type": "enum",
           "default": "compact",
@@ -635,6 +641,12 @@
           "description": "Ask for a tab name before creating a new tab."
         },
         {
+          "key": "ui.prompt_new_workspace_name",
+          "type": "boolean",
+          "default": "false",
+          "description": "Ask for a workspace name before interactive TUI creation."
+        },
+        {
           "key": "ui.pane_borders",
           "type": "boolean",
           "default": "true",
@@ -678,7 +690,7 @@
           "key": "ui.sidebar.agents.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"workspace\", \"tab\"], [\"agent\"]]",
-          "description": "Default expanded Agent sidebar layout. Supports built-in tokens and $name metadata tokens; at most 16 rows and 16 tokens per row."
+          "description": "Default expanded Agent sidebar layout. Entries may be token strings or inline { token, fg, bold, dim } style tables. Supports built-in and $name metadata tokens; at most 16 rows and 16 tokens per row."
         },
         {
           "key": "ui.sidebar.agents.rows_by_agent",
@@ -696,7 +708,7 @@
           "key": "ui.sidebar.spaces.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"workspace\"], [\"branch\", \"git_status\"]]",
-          "description": "Expanded Space sidebar layout. Supports built-in tokens and $name metadata tokens; at most 16 rows and 16 tokens per row."
+          "description": "Expanded Space sidebar layout. Entries may be token strings or inline { token, fg, bold, dim } style tables. Supports built-in and $name metadata tokens; at most 16 rows and 16 tokens per row."
         },
         {
           "key": "ui.accent",
