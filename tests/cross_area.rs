@@ -522,6 +522,7 @@ struct CellWire {
     hyperlink: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct CursorWire {
     x: u16,
