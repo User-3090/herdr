@@ -731,7 +731,10 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
         Some(ControlString::Incomplete {
             family: ControlStringFamily::Osc
         })
-    ) && matches!(buffer.get(..5), Some(b"\x1b]10;" | b"\x1b]11;" | b"\x1b]12;"))
+    ) && matches!(
+        buffer.get(..5),
+        Some(b"\x1b]10;" | b"\x1b]11;" | b"\x1b]12;")
+    )
 }
 
 fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
