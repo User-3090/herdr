@@ -613,7 +613,7 @@ mod windows_tests {
     fn windows_host_color_replies_convert_to_semantic_events() {
         let mut framer = windows_host_input_framer(true);
         let events =
-            framer.push(b"\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\");
+            framer.push(b"\x1b]10;rgb:ffff/eeee/dddd\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\\x1b]12;rgb:1212/3434/5656\x1b\\");
         let events = events
             .into_iter()
             .filter_map(windows_client_input_event_from_raw)
@@ -636,6 +636,14 @@ mod windows_tests {
                         r: 0x11,
                         g: 0x22,
                         b: 0x33,
+                    },
+                },
+                crate::protocol::ClientInputEvent::HostDefaultColor {
+                    kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                    color: crate::terminal_theme::RgbColor {
+                        r: 0x12,
+                        g: 0x34,
+                        b: 0x56,
                     },
                 },
             ]

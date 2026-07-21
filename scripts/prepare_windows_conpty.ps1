@@ -3,13 +3,23 @@ param(
     [string] $Destination,
 
     [ValidateSet("x64", "x86", "arm64")]
-    [string] $Architecture = "x64"
+    [string] $Architecture = "x64",
+
+    [string] $PackageVersion = "1.24.260710001",
+
+    [string] $PackageSha256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"
 )
 
 $ErrorActionPreference = "Stop"
 
-$packageVersion = "1.24.260710001"
-$packageSha256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"
+$PackageVersion = $PackageVersion.ToLowerInvariant()
+$PackageSha256 = $PackageSha256.ToLowerInvariant()
+if ($PackageVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z.-]+)?$') {
+    throw "Invalid Microsoft.Windows.Console.ConPTY package version: $PackageVersion"
+}
+if ($PackageSha256 -notmatch '^[0-9a-f]{64}$') {
+    throw "Invalid Microsoft.Windows.Console.ConPTY package SHA-256: $PackageSha256"
+}
 $packageUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/$packageVersion/microsoft.windows.console.conpty.$packageVersion.nupkg"
 $destinationPath = [System.IO.Path]::GetFullPath($Destination)
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "herdr-conpty-$([guid]::NewGuid().ToString('N'))"

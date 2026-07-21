@@ -115,17 +115,25 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertIn("ConPtyFuncs::open(&dll)", text)
         self.assertNotIn('Path::new("conpty.dll")', text)
 
-    def test_windows_conpty_package_is_pinned_and_bundled_as_a_pair(self) -> None:
+    def test_windows_conpty_package_defaults_and_nightly_resolver(self) -> None:
         project_root = Path(__file__).resolve().parent.parent
         script = (project_root / "scripts" / "prepare_windows_conpty.ps1").read_text()
+        resolver_path = project_root / "scripts" / "resolve_latest_windows_conpty.ps1"
+        resolver = resolver_path.read_text()
 
-        self.assertIn('packageVersion = "1.24.260710001"', script)
+        self.assertIn('[string] $PackageVersion = "1.24.260710001"', script)
         self.assertIn(
-            'packageSha256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"',
+            '[string] $PackageSha256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"',
             script,
         )
         self.assertIn('Join-Path $destinationPath "conpty.dll"', script)
         self.assertIn('Join-Path $destinationPath "OpenConsole.exe"', script)
+        self.assertTrue(resolver_path.is_file())
+        self.assertIn("https://api.nuget.org/v3-flatcontainer", resolver)
+        self.assertIn("IncludePrerelease", resolver)
+        self.assertIn("& dotnet nuget verify", resolver)
+        self.assertIn("runtimes\\win-x64\\native\\conpty.dll", resolver)
+        self.assertIn("build\\native\\runtimes\\x64\\OpenConsole.exe", resolver)
         self.assertTrue(
             (project_root / "vendor" / "licenses" / "Microsoft.Windows.Console.ConPTY.LICENSE.txt").is_file()
         )

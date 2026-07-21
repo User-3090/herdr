@@ -194,7 +194,7 @@ pub(crate) struct RawInputByteFramer {
     split_coalesced_escape: bool,
 }
 
-const HOST_COLOR_QUERY_REPLIES: u8 = 2;
+const HOST_COLOR_QUERY_REPLIES: u8 = 3;
 const MAX_ORPHANED_SGR_MOUSE_TAIL_BYTES: usize = 32;
 
 impl RawInputByteFramer {
@@ -216,7 +216,7 @@ impl RawInputByteFramer {
         self.drain_available_chunks()
     }
 
-    /// Hold a lone trailing ESC for one idle flush so an OSC 10/11 reply split
+    /// Hold a lone trailing ESC for one idle flush so an OSC 10/11/12 reply split
     /// at its ESC introducer stitches back together instead of leaking (#549).
     pub(crate) fn host_color_query_sent(&mut self) {
         self.host_color_replies_awaited = HOST_COLOR_QUERY_REPLIES;
@@ -731,7 +731,7 @@ fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bool {
         Some(ControlString::Incomplete {
             family: ControlStringFamily::Osc
         })
-    ) && matches!(buffer.get(..5), Some(b"\x1b]10;" | b"\x1b]11;"))
+    ) && matches!(buffer.get(..5), Some(b"\x1b]10;" | b"\x1b]11;" | b"\x1b]12;"))
 }
 
 fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
@@ -1200,6 +1200,25 @@ mod tests {
                 r: 0x11,
                 g: 0x22,
                 b: 0x33
+            }
+        );
+    }
+
+    #[test]
+    fn parses_host_cursor_color_response() {
+        let (RawInputEvent::HostDefaultColor { kind, color }, consumed) =
+            extract_one_event(b"\x1b]12;rgb:1212/3434/5656\x1b\\").unwrap()
+        else {
+            panic!("expected host cursor color response");
+        };
+        assert_eq!(consumed, 25);
+        assert_eq!(kind, DefaultColorKind::Cursor);
+        assert_eq!(
+            color,
+            RgbColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56
             }
         );
     }

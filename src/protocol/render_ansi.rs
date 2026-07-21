@@ -133,14 +133,17 @@ impl BlitEncoder {
     }
 }
 
-pub(crate) fn frame_with_drawn_cursor(mut frame: FrameData) -> FrameData {
+pub(crate) fn frame_with_drawn_cursor(
+    mut frame: FrameData,
+    cursor_color: Option<crate::terminal_theme::RgbColor>,
+) -> FrameData {
     if let Some(cursor) = frame.cursor.as_ref().filter(|cursor| cursor.visible) {
         let (x, y) = clamp_cursor_position(&frame, cursor.x, cursor.y);
         let idx = (y as usize)
             .saturating_mul(frame.width as usize)
             .saturating_add(x as usize);
         if let Some(cell) = frame.cells.get_mut(idx) {
-            if let Some((foreground, background)) = drawn_cursor_colors(cell) {
+            if let Some((foreground, background)) = drawn_cursor_colors(cell, cursor_color) {
                 cell.fg = foreground;
                 cell.bg = background;
                 cell.modifier &= !REVERSED_MODIFIER;
@@ -152,7 +155,24 @@ pub(crate) fn frame_with_drawn_cursor(mut frame: FrameData) -> FrameData {
     frame
 }
 
-fn drawn_cursor_colors(cell: &CellData) -> Option<(u32, u32)> {
+fn drawn_cursor_colors(
+    cell: &CellData,
+    cursor_color: Option<crate::terminal_theme::RgbColor>,
+) -> Option<(u32, u32)> {
+    if let Some(color) = cursor_color {
+        let luminance =
+            u32::from(color.r) * 299 + u32::from(color.g) * 587 + u32::from(color.b) * 114;
+        let foreground = if luminance >= 128_000 {
+            0x00_00_00_01
+        } else {
+            0x00_00_00_10
+        };
+        let background = 0x02_00_00_00
+            | (u32::from(color.r) << 16)
+            | (u32::from(color.g) << 8)
+            | u32::from(color.b);
+        return Some((foreground, background));
+    }
     let effective_background = if cell.modifier & REVERSED_MODIFIER != 0 {
         cell.fg
     } else {
@@ -1204,7 +1224,7 @@ mod tests {
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
-        let drawn = frame_with_drawn_cursor(frame.clone());
+        let drawn = frame_with_drawn_cursor(frame.clone(), None);
 
         assert_eq!(drawn.cells[5].modifier, REVERSED_MODIFIER);
         assert_eq!(frame.cells[5].modifier, 0);
@@ -1242,7 +1262,7 @@ mod tests {
             graphics: Vec::new(),
         };
 
-        let drawn = frame_with_drawn_cursor(frame);
+        let drawn = frame_with_drawn_cursor(frame, None);
 
         assert_eq!(drawn.cells[0].fg, 0x00_00_00_10);
         assert_eq!(drawn.cells[0].bg, 0x00_00_00_01);
@@ -1265,10 +1285,40 @@ mod tests {
             graphics: Vec::new(),
         };
 
-        let drawn = frame_with_drawn_cursor(frame);
+        let drawn = frame_with_drawn_cursor(frame, None);
 
         assert_eq!(drawn.cells[0].fg, 0x00_00_00_01);
         assert_eq!(drawn.cells[0].bg, 0x00_00_00_10);
+        assert_eq!(drawn.cells[0].modifier & REVERSED_MODIFIER, 0);
+    }
+
+    #[test]
+    fn drawn_cursor_uses_host_cursor_fill_color() {
+        let frame = FrameData {
+            cells: vec![make_cell("A", 0, 0x02_f0_f0_f0, 0)],
+            width: 1,
+            height: 1,
+            cursor: Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 2,
+            }),
+            hyperlinks: Vec::new(),
+            graphics: Vec::new(),
+        };
+
+        let drawn = frame_with_drawn_cursor(
+            frame,
+            Some(crate::terminal_theme::RgbColor {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }),
+        );
+
+        assert_eq!(drawn.cells[0].fg, 0x00_00_00_10);
+        assert_eq!(drawn.cells[0].bg, 0x02_12_34_56);
         assert_eq!(drawn.cells[0].modifier & REVERSED_MODIFIER, 0);
     }
 
@@ -1288,7 +1338,7 @@ mod tests {
             graphics: Vec::new(),
         };
 
-        assert_eq!(frame_with_drawn_cursor(frame.clone()), frame);
+        assert_eq!(frame_with_drawn_cursor(frame.clone(), None), frame);
     }
 
     #[test]

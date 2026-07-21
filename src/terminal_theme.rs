@@ -32,9 +32,10 @@ pub struct TerminalTheme {
 pub enum DefaultColorKind {
     Foreground,
     Background,
+    Cursor,
 }
 
-pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
+pub const HOST_COLOR_QUERY_SEQUENCE: &str = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\";
 pub const HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE: &str = "\x1b[?2031h";
 pub const HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE: &str = "\x1b[?2031l";
 
@@ -43,6 +44,7 @@ impl TerminalTheme {
         match kind {
             DefaultColorKind::Foreground => self.foreground = Some(color),
             DefaultColorKind::Background => self.background = Some(color),
+            DefaultColorKind::Cursor => {}
         }
         self
     }
@@ -61,6 +63,7 @@ pub fn parse_default_color_response(sequence: &str) -> Option<(DefaultColorKind,
     let kind = match command {
         "10" => DefaultColorKind::Foreground,
         "11" => DefaultColorKind::Background,
+        "12" => DefaultColorKind::Cursor,
         _ => return None,
     };
     Some((kind, parse_rgb_color(value)?))
@@ -70,6 +73,7 @@ pub fn osc_set_default_color_sequence(kind: DefaultColorKind, color: RgbColor) -
     let command = match kind {
         DefaultColorKind::Foreground => 10,
         DefaultColorKind::Background => 11,
+        DefaultColorKind::Cursor => 12,
     };
     format!(
         "\x1b]{command};rgb:{:02x}/{:02x}/{:02x}\x1b\\",
@@ -81,6 +85,7 @@ pub fn osc_reset_default_color_sequence(kind: DefaultColorKind) -> &'static str 
     match kind {
         DefaultColorKind::Foreground => "\x1b]110\x1b\\",
         DefaultColorKind::Background => "\x1b]111\x1b\\",
+        DefaultColorKind::Cursor => "\x1b]112\x1b\\",
     }
 }
 
@@ -159,6 +164,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_cursor_color_response() {
+        let parsed = parse_default_color_response("\x1b]12;rgb:1212/3434/5656\x1b\\");
+        assert_eq!(
+            parsed,
+            Some((
+                DefaultColorKind::Cursor,
+                RgbColor {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                },
+            ))
+        );
+    }
+
+    #[test]
     fn default_color_reset_sequences_use_xterm_osc_numbers() {
         assert_eq!(
             osc_reset_default_color_sequence(DefaultColorKind::Foreground),
@@ -167,6 +188,10 @@ mod tests {
         assert_eq!(
             osc_reset_default_color_sequence(DefaultColorKind::Background),
             "\x1b]111\x1b\\"
+        );
+        assert_eq!(
+            osc_reset_default_color_sequence(DefaultColorKind::Cursor),
+            "\x1b]112\x1b\\"
         );
     }
 

@@ -87,6 +87,8 @@ struct ClientState {
     redraw_on_focus_gained: bool,
     /// Whether this client draws the cursor into frame cells instead of using the host cursor.
     draw_host_cursor: bool,
+    /// Cursor fill color reported by the outer terminal through OSC 12.
+    host_cursor_color: Option<crate::terminal_theme::RgbColor>,
 }
 
 #[derive(Debug, Default)]
@@ -1304,6 +1306,7 @@ async fn run_client_loop(
         remote_image_paste_key: config.remote_image_paste_key,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         draw_host_cursor,
+        host_cursor_color: None,
     };
     debug!(?negotiated_encoding, "client render encoding active");
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
@@ -1414,6 +1417,17 @@ async fn run_client_loop(
                     }
                 } else {
                     let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
+                    if let [crate::raw_input::RawInputEvent::HostDefaultColor {
+                        kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                        color,
+                    }] = events.as_slice()
+                    {
+                        if state.host_cursor_color != Some(*color) {
+                            state.host_cursor_color = Some(*color);
+                            state.request_full_redraw();
+                        }
+                        continue;
+                    }
                     if crate::raw_input::events_require_host_surface_redraw(
                         &events,
                         state.redraw_on_focus_gained,
@@ -1478,8 +1492,32 @@ async fn run_client_loop(
                 }
             }
             #[cfg(windows)]
-            ClientLoopEvent::StdinEvents(events) => {
+            ClientLoopEvent::StdinEvents(mut events) => {
                 if state.attach_escape.is_some() {
+                    continue;
+                }
+                for event in &events {
+                    if let crate::protocol::ClientInputEvent::HostDefaultColor {
+                        kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                        color,
+                    } = event
+                    {
+                        if state.host_cursor_color != Some(*color) {
+                            state.host_cursor_color = Some(*color);
+                            state.request_full_redraw();
+                        }
+                    }
+                }
+                events.retain(|event| {
+                    !matches!(
+                        event,
+                        crate::protocol::ClientInputEvent::HostDefaultColor {
+                            kind: crate::terminal_theme::DefaultColorKind::Cursor,
+                            ..
+                        }
+                    )
+                });
+                if events.is_empty() {
                     continue;
                 }
                 let raw_events = events
@@ -1515,7 +1553,7 @@ async fn run_client_loop(
             ClientLoopEvent::ServerMessage(msg) => match msg {
                 ServerMessage::Frame(frame_data) => {
                     let frame_data = if state.draw_host_cursor {
-                        render_ansi::frame_with_drawn_cursor(frame_data)
+                        render_ansi::frame_with_drawn_cursor(frame_data, state.host_cursor_color)
                     } else {
                         frame_data
                     };
