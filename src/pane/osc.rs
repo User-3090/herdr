@@ -1726,7 +1726,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_cursor_override_without_known_host_colors() {
+    fn host_color_restore_cursor_override_without_known_colors() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = super::super::GhosttyPaneTerminal::new(terminal, tx).unwrap();

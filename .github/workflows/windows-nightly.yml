@@ -18,6 +18,7 @@ env:
   ARTIFACT_NAME: herdr-windows-x86_64
   CONPTY_VERSION: 1.24.260710001
   CONPTY_SHA256: 175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   sync:
@@ -154,7 +155,18 @@ jobs:
         run: cargo clippy --bin herdr --locked --target ${{ env.WINDOWS_TARGET }} -- -D warnings
 
       - name: Test Windows build
-        run: cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr windows_
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr raw_input::tests
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client::input
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_color
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr cursor
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr render_ansi::tests
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr app_theme_
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client_input_events_roundtrip
 
       - name: Build debug executable
         run: cargo build --locked --target ${{ env.WINDOWS_TARGET }}

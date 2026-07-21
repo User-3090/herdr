@@ -16,6 +16,7 @@ env:
   HERDR_BUILD_CHANNEL: experimental
   HERDR_BUILD_ID: ${{ github.sha }}
   HERDR_BUILD_COMMIT: ${{ github.sha }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -54,7 +55,14 @@ jobs:
           python -m unittest scripts.test_vendor_portable_pty
           cargo fmt --check
           cargo clippy --bin herdr --locked --target x86_64-pc-windows-msvc -- -D warnings
-          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr windows_
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr raw_input::tests
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr client::input
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr host_color
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr cursor
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr render_ansi::tests
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr app_theme_
+          cargo test --locked --target x86_64-pc-windows-msvc --bin herdr client_input_events_roundtrip
           cargo build --locked --target x86_64-pc-windows-msvc
 
       - name: Smoke system ConPTY fallback

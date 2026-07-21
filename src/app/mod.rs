@@ -2446,7 +2446,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_false_disables_default_theme_auto_switch() {
+    fn app_theme_explicit_false_disables_default_auto_switch() {
         let mut config = Config::default();
         config.theme.auto_switch = Some(false);
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
