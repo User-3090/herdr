@@ -63,16 +63,18 @@ jobs:
           if [[ "$before_sha" != "$after_sha" ]]; then
             changed=true
           fi
-          if ! gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" >/dev/null; then
-            echo "Repository release immutability must be enabled before publishing Windows nightlies." >&2
-            exit 1
-          fi
           release_tag="windows-nightly-${after_sha:0:12}-conpty-${CONPTY_VERSION}"
           release_exists=false
-          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          release_json="$(jq -c --arg tag "$release_tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
+          if [[ -n "$release_json" ]]; then
             release_draft="$(jq -r .draft <<<"$release_json")"
             if [[ "$release_draft" == "true" ]]; then
+              release_target="$(jq -r .target_commitish <<<"$release_json")"
+              if [[ "$release_target" != "$after_sha" ]]; then
+                echo "Existing draft ${release_tag} targets ${release_target}, expected ${after_sha}." >&2
+                exit 1
+              fi
               echo "Found interrupted draft ${release_tag}; it will be repaired."
             else
               tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
@@ -187,6 +189,7 @@ jobs:
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr terminal_restore_postlude
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_theme_update_preserves_cursor
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr host_terminal_theme_restore_probe
+          cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr restore_host_terminal_theme
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr render_ansi::tests
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr app_theme_
           cargo test --locked --target ${{ env.WINDOWS_TARGET }} --bin herdr client_input_events_roundtrip
@@ -330,12 +333,14 @@ jobs:
             fi
           }
 
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            release_draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq .draft)"
+          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+          existing_release="$(jq -c --arg tag "$tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
+          if [[ -n "$existing_release" ]]; then
+            release_draft="$(jq -r .draft <<<"$existing_release")"
             if [[ "$release_draft" == "true" ]]; then
-              tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
-              if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
-                echo "Existing draft tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
+              release_target="$(jq -r .target_commitish <<<"$existing_release")"
+              if [[ "$release_target" != "$SOURCE_SHA" ]]; then
+                echo "Existing draft ${tag} targets ${release_target}, expected ${SOURCE_SHA}." >&2
                 exit 1
               fi
               gh release upload "$tag" "$zip" "$checksum" --clobber --repo "$GITHUB_REPOSITORY"

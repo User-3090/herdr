@@ -1708,6 +1708,7 @@ mod tests {
         {
             let mut core = pane.core.lock().unwrap();
             core.transient_default_color_owner_pgid = Some(42);
+            core.child_default_background_changed = true;
             core.terminal.write(b"\x1b]11;rgb:dd/ee/ff\x1b\\");
         }
         assert_eq!(
@@ -1732,6 +1733,35 @@ mod tests {
 
         assert_eq!(pane_default_theme(&pane).background, host_theme.background);
         assert_eq!(pane_default_theme(&pane).foreground, host_theme.foreground);
+    }
+
+    #[test]
+    fn restore_host_terminal_theme_retains_unknown_foreground_after_cursor_reset() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = super::super::GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let shell_pid = 7;
+        {
+            let mut core = pane.core.lock().unwrap();
+            core.transient_default_color_owner_pgid = Some(42);
+            core.child_default_foreground_changed = true;
+            core.child_cursor_color_changed = true;
+            core.terminal.write(b"\x1b]10;#112233\x07\x1b]12;#445566\x07");
+
+            assert!(restore_host_terminal_theme_if_needed(
+                &mut core,
+                pane_id,
+                shell_pid,
+                false,
+                Some(&shell_job(shell_pid)),
+            ));
+            assert!(core.child_default_foreground_changed);
+            assert!(!core.child_cursor_color_changed);
+            assert_eq!(core.transient_default_color_owner_pgid, Some(42));
+        }
+
+        assert_eq!(pane.cursor_state().unwrap().color, None);
     }
 
     #[test]
