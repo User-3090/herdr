@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use tracing::warn;
 #[cfg(windows)]
-use windows_sys::Win32::System::Console::Beep;
+use windows_sys::Win32::System::Diagnostics::Debug::Beep;
 
 const DISABLE_SOUND_ENV: &str = "HERDR_DISABLE_SOUND";
 #[cfg(not(any(windows, target_os = "macos")))]
