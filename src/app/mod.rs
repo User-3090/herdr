@@ -2430,7 +2430,7 @@ mod tests {
     }
 
     #[test]
-    fn unconfigured_theme_follows_host_and_uses_one_light() {
+    fn app_theme_unconfigured_follows_host_and_uses_one_light() {
         let config = Config::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
@@ -2460,7 +2460,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_theme_preserves_manual_default_without_auto_switch() {
+    fn app_theme_explicit_preserves_manual_default_without_auto_switch() {
         let mut config = Config::default();
         config.theme.name = Some("tokyo-night".to_string());
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2473,7 +2473,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_auto_switch_uses_sibling_map_and_explicit_appearance() {
+    fn app_theme_auto_switch_uses_sibling_map_and_explicit_appearance() {
         let mut config = Config::default();
         config.theme.name = Some("tokyo-night".to_string());
         config.theme.auto_switch = Some(true);
@@ -2490,7 +2490,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_auto_switch_applies_custom_overrides_after_active_base() {
+    fn app_theme_auto_switch_applies_custom_overrides_after_active_base() {
         let mut config = Config::default();
         config.theme.name = Some("gruvbox".to_string());
         config.theme.auto_switch = Some(true);
@@ -2511,7 +2511,7 @@ mod tests {
     }
 
     #[test]
-    fn inferred_background_appearance_does_not_override_explicit_report() {
+    fn app_theme_inferred_background_does_not_override_explicit_report() {
         let mut config = Config::default();
         config.theme.name = Some("catppuccin".to_string());
         config.theme.auto_switch = Some(true);

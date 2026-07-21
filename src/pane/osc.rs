@@ -912,17 +912,21 @@ pub(super) fn restore_host_terminal_theme_if_needed(
     let foreground_changed = core.child_default_foreground_changed;
     let background_changed = core.child_default_background_changed;
     let cursor_changed = core.child_cursor_color_changed;
-    let restore_theme =
-        !core.host_terminal_theme.is_empty() && (foreground_changed || background_changed);
-    if restore_theme {
+    let restore_foreground = foreground_changed && core.host_terminal_theme.foreground.is_some();
+    let restore_background = background_changed && core.host_terminal_theme.background.is_some();
+    if restore_foreground || restore_background {
         write_host_terminal_theme_selective(
             &mut core.terminal,
             core.host_terminal_theme,
-            foreground_changed,
-            background_changed,
+            restore_foreground,
+            restore_background,
         );
-        core.child_default_foreground_changed = false;
-        core.child_default_background_changed = false;
+        if restore_foreground {
+            core.child_default_foreground_changed = false;
+        }
+        if restore_background {
+            core.child_default_background_changed = false;
+        }
     }
     if cursor_changed {
         write_host_default_color(
@@ -942,7 +946,7 @@ pub(super) fn restore_host_terminal_theme_if_needed(
         pane = pane_id.raw(),
         owner_pgid, "restored host terminal default colors after transient override"
     );
-    restore_theme || cursor_changed
+    restore_foreground || restore_background || cursor_changed
 }
 
 #[cfg(test)]
@@ -1763,6 +1767,86 @@ mod tests {
         }
 
         assert_eq!(pane.cursor_state().unwrap().color, None);
+    }
+
+    #[test]
+    fn restore_host_terminal_theme_waits_for_each_unknown_channel() {
+        let cases = [
+            (
+                crate::terminal_theme::TerminalTheme {
+                    foreground: Some(crate::terminal_theme::RgbColor {
+                        r: 0xaa,
+                        g: 0xbb,
+                        b: 0xcc,
+                    }),
+                    background: None,
+                },
+                false,
+                true,
+            ),
+            (
+                crate::terminal_theme::TerminalTheme {
+                    foreground: None,
+                    background: Some(crate::terminal_theme::RgbColor {
+                        r: 0xdd,
+                        g: 0xee,
+                        b: 0xff,
+                    }),
+                },
+                true,
+                false,
+            ),
+        ];
+
+        for (host_theme, foreground_pending, background_pending) in cases {
+            let (tx, _rx) = mpsc::channel(4);
+            let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+            let pane = super::super::GhosttyPaneTerminal::new(terminal, tx).unwrap();
+            pane.apply_host_terminal_theme(host_theme);
+            {
+                let mut core = pane.core.lock().unwrap();
+                core.transient_default_color_owner_pgid = Some(42);
+                core.child_default_foreground_changed = true;
+                core.child_default_background_changed = true;
+                core.terminal
+                    .write(b"\x1b]10;#112233\x07\x1b]11;#445566\x07");
+
+                assert!(restore_host_terminal_theme_if_needed(
+                    &mut core,
+                    PaneId::from_raw(1),
+                    7,
+                    false,
+                    Some(&shell_job(7)),
+                ));
+                assert_eq!(
+                    core.child_default_foreground_changed,
+                    foreground_pending
+                );
+                assert_eq!(
+                    core.child_default_background_changed,
+                    background_pending
+                );
+                assert_eq!(core.transient_default_color_owner_pgid, Some(42));
+            }
+
+            let effective_theme = pane_default_theme(&pane);
+            assert_eq!(
+                effective_theme.foreground,
+                host_theme.foreground.or(Some(crate::terminal_theme::RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                }))
+            );
+            assert_eq!(
+                effective_theme.background,
+                host_theme.background.or(Some(crate::terminal_theme::RgbColor {
+                    r: 0x44,
+                    g: 0x55,
+                    b: 0x66,
+                }))
+            );
+        }
     }
 
     #[test]

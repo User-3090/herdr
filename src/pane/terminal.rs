@@ -2920,7 +2920,11 @@ fn should_probe_host_terminal_theme_restore(core: &GhosttyPaneCore) -> bool {
     if core.transient_default_color_owner_pgid.is_none() {
         return false;
     }
-    if core.host_terminal_theme.is_empty() && !core.child_cursor_color_changed {
+    let can_restore_foreground = core.child_default_foreground_changed
+        && core.host_terminal_theme.foreground.is_some();
+    let can_restore_background = core.child_default_background_changed
+        && core.host_terminal_theme.background.is_some();
+    if !can_restore_foreground && !can_restore_background && !core.child_cursor_color_changed {
         return false;
     }
 
@@ -3560,6 +3564,7 @@ mod tests {
         {
             let mut core = pane.core.lock().unwrap();
             core.transient_default_color_owner_pgid = Some(42);
+            core.child_default_foreground_changed = true;
             core.host_terminal_theme = crate::terminal_theme::TerminalTheme {
                 foreground: Some(crate::terminal_theme::RgbColor {
                     r: 0xaa,
@@ -3586,6 +3591,7 @@ mod tests {
         {
             let mut core = pane.core.lock().unwrap();
             core.transient_default_color_owner_pgid = Some(42);
+            core.child_default_foreground_changed = true;
             core.host_terminal_theme = crate::terminal_theme::TerminalTheme {
                 foreground: Some(crate::terminal_theme::RgbColor {
                     r: 0xaa,
