@@ -61,7 +61,6 @@ index 0000000..0000000 100644
 +            "bundled OpenConsole.exe exists, but matching conpty.dll is missing"
 +        );
 +        return kernel;
-     }
 @@ -59,0 +87,9 @@ fn load_conpty() -> ConPtyFuncs {
 +
 +    assert!(
