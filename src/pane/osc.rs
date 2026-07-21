@@ -912,8 +912,8 @@ pub(super) fn restore_host_terminal_theme_if_needed(
     let foreground_changed = core.child_default_foreground_changed;
     let background_changed = core.child_default_background_changed;
     let cursor_changed = core.child_cursor_color_changed;
-    let restore_theme = !core.host_terminal_theme.is_empty()
-        && (foreground_changed || background_changed);
+    let restore_theme =
+        !core.host_terminal_theme.is_empty() && (foreground_changed || background_changed);
     if restore_theme {
         write_host_terminal_theme_selective(
             &mut core.terminal,
