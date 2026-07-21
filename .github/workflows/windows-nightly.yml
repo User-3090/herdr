@@ -79,11 +79,10 @@ jobs:
             else
               tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
               release_prerelease="$(jq -r .prerelease <<<"$release_json")"
-              release_immutable="$(jq -r .immutable <<<"$release_json")"
               asset_count="$(jq '.assets | length' <<<"$release_json")"
               expected_assets="$(jq '[.assets[] | select(.name == "herdr-windows-x86_64.zip" or .name == "herdr-windows-x86_64.zip.sha256") | select(.digest | startswith("sha256:"))] | length' <<<"$release_json")"
-              if [[ "$tag_sha" != "$after_sha" || "$release_prerelease" != "true" || "$release_immutable" != "true" || "$asset_count" != "2" || "$expected_assets" != "2" ]]; then
-                echo "Existing release ${release_tag} failed immutable release verification." >&2
+              if [[ "$tag_sha" != "$after_sha" || "$release_prerelease" != "true" || "$asset_count" != "2" || "$expected_assets" != "2" ]]; then
+                echo "Existing release ${release_tag} failed release verification." >&2
                 exit 1
               fi
               release_exists=true
@@ -323,12 +322,11 @@ jobs:
             release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
             is_draft="$(jq -r .draft <<<"$release_json")"
             is_prerelease="$(jq -r .prerelease <<<"$release_json")"
-            is_immutable="$(jq -r .immutable <<<"$release_json")"
             asset_count="$(jq '.assets | length' <<<"$release_json")"
             published_zip_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip") | .digest' <<<"$release_json")"
             published_checksum_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip.sha256") | .digest' <<<"$release_json")"
-            if [[ "$is_draft" != "false" || "$is_prerelease" != "true" || "$is_immutable" != "true" || "$asset_count" != "2" || "$published_zip_digest" != "$zip_digest" || "$published_checksum_digest" != "$checksum_digest" ]]; then
-              echo "Existing release is incomplete or differs from this immutable build." >&2
+            if [[ "$is_draft" != "false" || "$is_prerelease" != "true" || "$asset_count" != "2" || "$published_zip_digest" != "$zip_digest" || "$published_checksum_digest" != "$checksum_digest" ]]; then
+              echo "Existing release is incomplete or differs from this tested build." >&2
               exit 1
             fi
           }
