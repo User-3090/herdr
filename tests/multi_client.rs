@@ -617,6 +617,15 @@ struct CursorWire {
     y: u16,
     visible: bool,
     shape: u8,
+    color: Option<RgbWire>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct RgbWire {
+    r: u8,
+    g: u8,
+    b: u8,
 }
 
 fn decode_frame_payload(payload: &[u8]) -> io::Result<FrameWire> {
