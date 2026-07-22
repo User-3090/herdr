@@ -24,7 +24,7 @@ jobs:
       - name: Close issues referenced by pushed commits
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.KANGAL_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
