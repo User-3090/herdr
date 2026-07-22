@@ -9,8 +9,11 @@ Set-StrictMode -Version 2.0
 Write-Output 'Installing Visual Studio C++ Build Tools...'
 $buildToolsOverride = '--wait --quiet --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
 Install-ProvisioningWinGetPackage -Role 'Visual Studio Build Tools' `
-    -Id 'Microsoft.VisualStudio.2022.BuildTools' -Version '17.14.36' -Override $buildToolsOverride
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    -Id 'Microsoft.VisualStudio.2022.BuildTools' -Override $buildToolsOverride
+$vswhere = [string](Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe')
+if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+    throw "Visual Studio installer locator is missing: $vswhere"
+}
 $buildToolsPath = Invoke-ProvisioningNative -Role 'Visual Studio C++ workload check' -FilePath $vswhere `
     -ArgumentList @('-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath')
 if ([string]::IsNullOrWhiteSpace(($buildToolsPath -join ' ').Trim())) {
@@ -18,15 +21,15 @@ if ([string]::IsNullOrWhiteSpace(($buildToolsPath -join ' ').Trim())) {
 }
 
 Write-Output 'Installing Python...'
-Install-ProvisioningWinGetPackage -Role 'Python' -Id 'Python.Python.3.13' -Version '3.13.14'
-$pythonVersion = Assert-ProvisioningCommand -Role 'Python' -Name 'python.exe' -VersionArguments @('--version') -ExpectedPattern '^Python 3\.13\.14$'
+Install-ProvisioningWinGetPackage -Role 'Python' -Id 'Python.Python.3.13'
+$pythonVersion = Assert-ProvisioningCommand -Role 'Python' -Name 'python.exe' -VersionArguments @('--version') -ExpectedPattern '^Python 3\.13\.\d+$'
 
 Write-Output 'Installing Zig...'
 Install-ProvisioningWinGetPackage -Role 'Zig' -Id 'zig.zig' -Version '0.15.2'
 $zigVersion = Assert-ProvisioningCommand -Role 'Zig' -Name 'zig.exe' -VersionArguments @('version') -ExpectedPattern '^0\.15\.2$'
 
 Write-Output 'Installing Rustup and the repository toolchain...'
-Install-ProvisioningWinGetPackage -Role 'Rustup' -Id 'Rustlang.Rustup' -Version '1.29.0'
+Install-ProvisioningWinGetPackage -Role 'Rustup' -Id 'Rustlang.Rustup'
 $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
 if ($env:Path.Split(';') -inotcontains $cargoDirectory) {
     $env:Path = $cargoDirectory + ';' + $env:Path
@@ -39,10 +42,10 @@ $rustVersion = Assert-ProvisioningCommand -Role 'Rust' -Name 'rustc.exe' -Versio
 $cargoVersion = Assert-ProvisioningCommand -Role 'Cargo' -Name 'cargo.exe' -VersionArguments @('--version') -ExpectedPattern '^cargo 1\.96\.1 '
 
 Write-Output 'Installing Cargo Nextest and Just...'
-Install-ProvisioningWinGetPackage -Role 'Cargo Nextest' -Id 'nextest.cargo-nextest' -Version '0.9.140'
-$nextestVersion = Assert-ProvisioningCommand -Role 'Cargo Nextest' -Name 'cargo-nextest.exe' -VersionArguments @('--version') -ExpectedPattern '^cargo-nextest 0\.9\.140 '
-Install-ProvisioningWinGetPackage -Role 'Just' -Id 'Casey.Just' -Version '1.57.0'
-$justVersion = Assert-ProvisioningCommand -Role 'Just' -Name 'just.exe' -VersionArguments @('--version') -ExpectedPattern '^just 1\.57\.0$'
+Install-ProvisioningWinGetPackage -Role 'Cargo Nextest' -Id 'nextest.cargo-nextest'
+$nextestVersion = Assert-ProvisioningCommand -Role 'Cargo Nextest' -Name 'cargo-nextest.exe' -VersionArguments @('--version') -ExpectedPattern '^cargo-nextest \d+\.\d+\.\d+ '
+Install-ProvisioningWinGetPackage -Role 'Just' -Id 'Casey.Just'
+$justVersion = Assert-ProvisioningCommand -Role 'Just' -Name 'just.exe' -VersionArguments @('--version') -ExpectedPattern '^just \d+\.\d+\.\d+$'
 
 if (-not (Test-Path -LiteralPath (Join-Path $ProjectDirectory 'Cargo.toml') -PathType Leaf)) {
     throw "Herdr Cargo.toml is missing from mapped project: $ProjectDirectory"
