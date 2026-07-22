@@ -1,7 +1,9 @@
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 
 const repoBlob = 'https://github.com/ogulcancelik/herdr/blob/master/';
+const nonCanonicalDocsPath = /^\/(?:ja\/|zh-cn\/)?docs\/(?:preview|\d+\.\d+\.\d+)(?:\/|$)/;
 
 function rewriteHerdrLinks() {
   const docsLinks = new Map([
@@ -54,6 +56,13 @@ export default defineConfig({
     '/zh-cn': '/zh-cn/docs/',
   },
   integrations: [
+    sitemap({
+      filter: (page) => !nonCanonicalDocsPath.test(new URL(page).pathname),
+      i18n: {
+        defaultLocale: 'root',
+        locales: { root: 'en', ja: 'ja', 'zh-cn': 'zh-CN' },
+      },
+    }),
     starlight({
       title: 'herdr',
       description: 'Terminal-native agent runtime and multiplexer.',
@@ -190,7 +199,7 @@ export default defineConfig({
           translations: { ja: 'ヘルプ', 'zh-CN': '帮助' },
           items: [
             { label: 'Troubleshooting', translations: { ja: 'トラブルシューティング', 'zh-CN': '故障排除' }, slug: 'docs/troubleshooting' },
-            { label: 'Preview docs', translations: { ja: 'プレビュー版ドキュメント', 'zh-CN': '预览版文档' }, slug: 'docs/preview' },
+            { label: 'Next docs', translations: { ja: '次期版ドキュメント', 'zh-CN': '下一版文档' }, slug: 'docs/preview' },
           ],
         },
       ],
