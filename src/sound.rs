@@ -428,5 +428,4 @@ mod tests {
         assert_eq!(env_path, Some(path.as_os_str()));
         assert!(!command.get_args().any(|arg| arg == path.as_os_str()));
     }
-
 }
