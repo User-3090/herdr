@@ -3,9 +3,10 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, RecvTimeoutError},
     Arc,
 };
 use std::thread::{self, JoinHandle};
@@ -294,25 +295,73 @@ fn bridge_connection(
         .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "ssh bridge stdout missing"))?;
     let (mut stream_to_child, mut child_to_stream) = stream.split();
 
+    let (upload_done_tx, upload_done_rx) = mpsc::sync_channel(1);
     let upload = thread::spawn(move || {
-        let _ = copy_flush(&mut stream_to_child, &mut child_stdin);
+        let result = copy_flush(&mut stream_to_child, &mut child_stdin);
+        let _ = upload_done_tx.send(result);
     });
     let download = thread::spawn(move || {
         let _ = copy_flush(&mut child_stdout, &mut child_to_stream);
     });
 
-    let status = child.wait()?;
+    let completion = wait_for_bridge_child(&mut child, &upload_done_rx)?;
     let _ = upload.join();
     let _ = download.join();
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::new(
+    match completion {
+        BridgeCompletion::LocalClosed(result) => result.map(|_| ()),
+        BridgeCompletion::RemoteExited(status) if status.success() => Ok(()),
+        BridgeCompletion::RemoteExited(status) => Err(io::Error::new(
             io::ErrorKind::ConnectionAborted,
             format!("ssh bridge exited with {status}"),
-        ))
+        )),
     }
+}
+
+#[derive(Debug)]
+enum BridgeCompletion {
+    LocalClosed(io::Result<u64>),
+    RemoteExited(ExitStatus),
+}
+
+fn wait_for_bridge_child(
+    child: &mut Child,
+    upload_done: &Receiver<io::Result<u64>>,
+) -> io::Result<BridgeCompletion> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(BridgeCompletion::RemoteExited(status));
+        }
+        match upload_done.recv_timeout(BRIDGE_ACCEPT_POLL) {
+            Ok(result) => {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(BridgeCompletion::RemoteExited(status));
+                }
+                terminate_bridge_child(child)?;
+                return Ok(BridgeCompletion::LocalClosed(result));
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                terminate_bridge_child(child)?;
+                return Ok(BridgeCompletion::LocalClosed(Err(io::Error::other(
+                    "ssh bridge upload worker stopped unexpectedly",
+                ))));
+            }
+        }
+    }
+}
+
+fn terminate_bridge_child(child: &mut Child) -> io::Result<ExitStatus> {
+    if let Err(kill_error) = child.kill() {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        return Err(io::Error::new(
+            kill_error.kind(),
+            format!("failed to stop ssh bridge after local detach: {kill_error}"),
+        ));
+    }
+    child.wait()
 }
 
 fn ssh_bridge_command(target: &str, session_name: &str) -> Command {
@@ -520,5 +569,29 @@ mod tests {
         assert!(!name.contains(':'));
         assert!(!name.contains('/'));
         assert!(name.len() < 100);
+    }
+
+    #[test]
+    fn windows_remote_bridge_stops_child_after_local_disconnect() {
+        let mut child = Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let (upload_done_tx, upload_done_rx) = mpsc::sync_channel(1);
+        upload_done_tx.send(Ok(0)).unwrap();
+
+        let completion = wait_for_bridge_child(&mut child, &upload_done_rx).unwrap();
+
+        assert!(matches!(completion, BridgeCompletion::LocalClosed(Ok(0))));
+        assert!(child.try_wait().unwrap().is_some());
     }
 }
