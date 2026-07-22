@@ -2,7 +2,7 @@ name: Windows experimental build
 
 on:
   push:
-    branches: [windows-conpty-theme]
+    branches: [windows-conpty-theme, windows]
 
 concurrency:
   group: windows-experimental-${{ github.ref }}
@@ -27,6 +27,22 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+
+      - name: Resolve latest signed Microsoft ConPTY package
+        id: conpty
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $package = .\scripts\resolve_latest_windows_conpty.ps1 -IncludePrerelease
+          "CONPTY_VERSION=$($package.Version)" >> $env:GITHUB_ENV
+          "CONPTY_SHA256=$($package.Sha256)" >> $env:GITHUB_ENV
+          @(
+            "### Microsoft ConPTY"
+            "- Version: ``$($package.Version)``"
+            "- SHA-256: ``$($package.Sha256)``"
+            "- Prerelease: ``$($package.IsPrerelease)``"
+          ) >> $env:GITHUB_STEP_SUMMARY
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
@@ -81,7 +97,7 @@ jobs:
         run: |
           $exeDir = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug"
           $exe = Join-Path $exeDir "herdr.exe"
-          .\scripts\prepare_windows_conpty.ps1 -Destination $exeDir -Architecture x64
+          .\scripts\prepare_windows_conpty.ps1 -Destination $exeDir -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -ExpectedHostPath (Join-Path $exeDir "x64\OpenConsole.exe") -Session "ci-bundled-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Build release
@@ -93,15 +109,31 @@ jobs:
           $artifact = Join-Path $PWD "artifact\herdr-windows-x86_64"
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
           Copy-Item target\x86_64-pc-windows-msvc\release\herdr.exe (Join-Path $artifact "herdr.exe")
-          .\scripts\prepare_windows_conpty.ps1 -Destination $artifact -Architecture x64
+          .\scripts\prepare_windows_conpty.ps1 -Destination $artifact -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
           Get-ChildItem -LiteralPath $artifact -Recurse -File -Filter "*.txt" | Remove-Item -Force
+
+          $expectedFiles = @(
+            "arm64/OpenConsole.exe"
+            "conpty.dll"
+            "herdr.exe"
+            "x64/OpenConsole.exe"
+          )
+          $actualFiles = @(
+            Get-ChildItem -LiteralPath $artifact -Recurse -File |
+              ForEach-Object { [IO.Path]::GetRelativePath($artifact, $_.FullName).Replace('\', '/') } |
+              Sort-Object
+          )
+          if (@(Compare-Object $expectedFiles $actualFiles -CaseSensitive).Count -ne 0) {
+            throw "Unexpected experimental package files: $($actualFiles -join ', ')"
+          }
 
       - name: Smoke packaged release executable
         shell: pwsh
         run: |
           $artifact = Join-Path $PWD "artifact\herdr-windows-x86_64"
           $version = & (Join-Path $artifact "herdr.exe") --version
-          if (-not $version.Contains("experimental.$env:GITHUB_SHA")) {
+          $expectedVersion = "^herdr [0-9]+\.[0-9]+\.[0-9]+-experimental\.$([regex]::Escape($env:GITHUB_SHA))$"
+          if ([string] $version -cnotmatch $expectedVersion) {
             throw "Experimental build identity missing from packaged executable: $version"
           }
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath (Join-Path $artifact "herdr.exe") -ExpectedHostPath (Join-Path $artifact "x64\OpenConsole.exe") -Session "ci-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"

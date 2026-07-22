@@ -16,8 +16,6 @@ env:
   RUST_TOOLCHAIN_VERSION: 1.96.1
   WINDOWS_TARGET: x86_64-pc-windows-msvc
   ARTIFACT_NAME: herdr-windows-x86_64
-  CONPTY_VERSION: 1.24.260710001
-  CONPTY_SHA256: 175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -31,7 +29,6 @@ jobs:
       sha: ${{ steps.sync.outputs.sha }}
       upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
       changed: ${{ steps.sync.outputs.changed }}
-      release_exists: ${{ steps.sync.outputs.release_exists }}
     steps:
       - name: Resolve and merge upstream
         id: sync
@@ -63,37 +60,10 @@ jobs:
           if [[ "$before_sha" != "$after_sha" ]]; then
             changed=true
           fi
-          release_tag="windows-nightly-${after_sha:0:12}-conpty-${CONPTY_VERSION}"
-          release_exists=false
-          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
-          release_json="$(jq -c --arg tag "$release_tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
-          if [[ -n "$release_json" ]]; then
-            release_draft="$(jq -r .draft <<<"$release_json")"
-            if [[ "$release_draft" == "true" ]]; then
-              release_target="$(jq -r .target_commitish <<<"$release_json")"
-              if [[ "$release_target" != "$after_sha" ]]; then
-                echo "Existing draft ${release_tag} targets ${release_target}, expected ${after_sha}." >&2
-                exit 1
-              fi
-              echo "Found interrupted draft ${release_tag}; it will be repaired."
-            else
-              tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
-              release_prerelease="$(jq -r .prerelease <<<"$release_json")"
-              asset_count="$(jq '.assets | length' <<<"$release_json")"
-              expected_assets="$(jq '[.assets[] | select(.name == "herdr-windows-x86_64.zip" or .name == "herdr-windows-x86_64.zip.sha256") | select(.digest | startswith("sha256:"))] | length' <<<"$release_json")"
-              if [[ "$tag_sha" != "$after_sha" || "$release_prerelease" != "true" || "$asset_count" != "2" || "$expected_assets" != "2" ]]; then
-                echo "Existing release ${release_tag} failed release verification." >&2
-                exit 1
-              fi
-              release_exists=true
-            fi
-          fi
-
           {
             echo "sha=${after_sha}"
             echo "upstream_sha=${upstream_sha}"
             echo "changed=${changed}"
-            echo "release_exists=${release_exists}"
           } >> "$GITHUB_OUTPUT"
 
           {
@@ -101,23 +71,208 @@ jobs:
             echo "- Upstream: \`${upstream_sha}\`"
             echo "- Fork branch: \`${after_sha}\`"
             echo "- Branch changed: \`${changed}\`"
-            echo "- Pinned release exists: \`${release_exists}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  build:
-    name: Test and package Windows build
+  prepare:
+    name: Resolve signed ConPTY and release state
     needs: sync
-    if: needs.sync.outputs.release_exists != 'true' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       conpty_version: ${{ steps.conpty.outputs.version }}
       conpty_sha256: ${{ steps.conpty.outputs.sha256 }}
+      release_exists: ${{ steps.release.outputs.exists }}
+    env:
+      SOURCE_SHA: ${{ needs.sync.outputs.sha }}
+    steps:
+      - name: Checkout immutable fork commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          persist-credentials: false
+
+      - name: Resolve latest signed Microsoft ConPTY package
+        id: conpty
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $package = .\scripts\resolve_latest_windows_conpty.ps1 -IncludePrerelease
+          "version=$($package.Version)" >> $env:GITHUB_OUTPUT
+          "sha256=$($package.Sha256)" >> $env:GITHUB_OUTPUT
+          @(
+            "### Microsoft ConPTY"
+            "- Version: ``$($package.Version)``"
+            "- SHA-256: ``$($package.Sha256)``"
+            "- Prerelease: ``$($package.IsPrerelease)``"
+          ) >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Check exact prerelease state
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONPTY_VERSION: ${{ steps.conpty.outputs.version }}
+          CONPTY_SHA256: ${{ steps.conpty.outputs.sha256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          function Get-ExactTagSha([string] $Tag) {
+            $encodedTag = [Uri]::EscapeDataString($Tag)
+            $refsJson = & gh api "repos/$env:GITHUB_REPOSITORY/git/matching-refs/tags/$encodedTag"
+            $refs = @(($refsJson -join "`n") | ConvertFrom-Json)
+            $exactRefs = @($refs | Where-Object { $_.ref -ceq "refs/tags/$Tag" })
+            if ($exactRefs.Count -gt 1) {
+              throw "Multiple exact Git refs exist for tag $Tag."
+            }
+            if ($exactRefs.Count -eq 0) {
+              return $null
+            }
+            return (& gh api "repos/$env:GITHUB_REPOSITORY/commits/$encodedTag" --jq .sha).Trim()
+          }
+
+          $shortSha = $env:SOURCE_SHA.Substring(0, 12)
+          $tag = "windows-nightly-$shortSha-conpty-$env:CONPTY_VERSION"
+          $releasePagesJson = & gh api --paginate --slurp "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          $releasePages = ($releasePagesJson -join "`n") | ConvertFrom-Json
+          $releases = @($releasePages | ForEach-Object { $_ })
+          $matchingReleases = @($releases | Where-Object { $_.tag_name -ceq $tag })
+          if ($matchingReleases.Count -gt 1) {
+            throw "Multiple releases exist for tag $tag."
+          }
+          $release = $matchingReleases | Select-Object -First 1
+          $releaseExists = $false
+
+          if ($null -ne $release) {
+            $tagSha = Get-ExactTagSha $tag
+            if ($null -ne $tagSha -and $tagSha -cne $env:SOURCE_SHA) {
+              throw "Existing tag $tag points to $tagSha, expected $env:SOURCE_SHA."
+            }
+            if ($release.draft) {
+              if ($release.target_commitish -cne $env:SOURCE_SHA) {
+                throw "Existing draft $tag targets $($release.target_commitish), expected $env:SOURCE_SHA."
+              }
+              Write-Host "Found interrupted draft $tag; it will be repaired."
+            } else {
+              if ($null -eq $tagSha) {
+                throw "Published release $tag has no exact Git tag."
+              }
+              $assets = @($release.assets)
+              $expectedAssetNames = @(
+                "herdr-windows-x86_64.zip"
+                "herdr-windows-x86_64.zip.sha256"
+              )
+              $assetNames = @($assets | ForEach-Object { $_.name } | Sort-Object)
+              $body = [string] $release.body
+              $requiredNotes = @(
+                "Workflow owner: $env:GITHUB_REPOSITORY windows-nightly/v1",
+                "Fork commit: $env:SOURCE_SHA",
+                "Microsoft ConPTY package: $env:CONPTY_VERSION",
+                "Microsoft ConPTY package SHA-256: $env:CONPTY_SHA256"
+              )
+              $missingNotes = @($requiredNotes | Where-Object { -not $body.Contains($_) })
+              if (
+                -not $release.prerelease -or
+                $assets.Count -ne 2 -or
+                @(Compare-Object $expectedAssetNames $assetNames -CaseSensitive).Count -ne 0 -or
+                $missingNotes.Count -ne 0
+              ) {
+                throw "Existing release $tag failed source, ConPTY, or asset verification."
+              }
+
+              $tempDir = Join-Path $env:RUNNER_TEMP "verify-$([guid]::NewGuid().ToString('N'))"
+              New-Item -ItemType Directory -Path $tempDir | Out-Null
+              try {
+                & gh release download $tag --repo $env:GITHUB_REPOSITORY --dir $tempDir
+                $zip = Join-Path $tempDir "herdr-windows-x86_64.zip"
+                $checksum = "$zip.sha256"
+                if (-not (Test-Path -LiteralPath $zip -PathType Leaf) -or -not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+                  throw "Published release $tag is missing an expected downloaded asset."
+                }
+
+                $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+                $checksumHash = (Get-FileHash -LiteralPath $checksum -Algorithm SHA256).Hash.ToLowerInvariant()
+                foreach ($assetCheck in @(
+                  @{ Name = "herdr-windows-x86_64.zip"; Hash = $zipHash },
+                  @{ Name = "herdr-windows-x86_64.zip.sha256"; Hash = $checksumHash }
+                )) {
+                  $asset = @($assets | Where-Object { $_.name -ceq $assetCheck.Name })
+                  if (
+                    $asset.Count -ne 1 -or
+                    $asset[0].state -cne "uploaded" -or
+                    $asset[0].digest -cne "sha256:$($assetCheck.Hash)"
+                  ) {
+                    throw "Published asset $($assetCheck.Name) failed state or digest verification."
+                  }
+                }
+
+                $checksumLine = (Get-Content -LiteralPath $checksum -Raw).Trim()
+                if ($checksumLine -cnotmatch '^([0-9a-fA-F]{64})  herdr-windows-x86_64\.zip$') {
+                  throw "Published checksum asset has an invalid format."
+                }
+                if ($Matches[1].ToLowerInvariant() -ne $zipHash) {
+                  throw "Published checksum does not match the ZIP."
+                }
+
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+                try {
+                  $expectedFiles = @(
+                    "arm64/OpenConsole.exe"
+                    "conpty.dll"
+                    "herdr.exe"
+                    "x64/OpenConsole.exe"
+                  )
+                  $actualFiles = @(
+                    $archive.Entries |
+                      Where-Object { -not [string]::IsNullOrEmpty($_.Name) } |
+                      ForEach-Object { $_.FullName.Replace('\', '/') } |
+                      Sort-Object
+                  )
+                  if (@(Compare-Object $expectedFiles $actualFiles -CaseSensitive).Count -ne 0) {
+                    throw "Published ZIP has unexpected files: $($actualFiles -join ', ')"
+                  }
+                } finally {
+                  $archive.Dispose()
+                }
+
+                $expanded = Join-Path $tempDir "expanded"
+                Expand-Archive -LiteralPath $zip -DestinationPath $expanded
+                $version = & (Join-Path $expanded "herdr.exe") --version
+                $expectedVersion = "^herdr [0-9]+\.[0-9]+\.[0-9]+-nightly\.$([regex]::Escape($env:SOURCE_SHA))$"
+                if ($LASTEXITCODE -ne 0 -or [string] $version -cnotmatch $expectedVersion) {
+                  throw "Published executable identity does not match $env:SOURCE_SHA`: $version"
+                }
+              } finally {
+                Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+              }
+              $releaseExists = $true
+            }
+          }
+
+          "exists=$($releaseExists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          @(
+            "### Nightly release gate"
+            "- Tag: ``$tag``"
+            "- Exact published release exists: ``$releaseExists``"
+          ) >> $env:GITHUB_STEP_SUMMARY
+
+  build:
+    name: Test and package Windows build
+    needs: [sync, prepare]
+    if: needs.prepare.outputs.release_exists != 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.sha }}
       UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+      CONPTY_VERSION: ${{ needs.prepare.outputs.conpty_version }}
+      CONPTY_SHA256: ${{ needs.prepare.outputs.conpty_sha256 }}
       HERDR_BUILD_CHANNEL: nightly
       HERDR_BUILD_ID: ${{ needs.sync.outputs.sha }}
       HERDR_BUILD_COMMIT: ${{ needs.sync.outputs.sha }}
@@ -149,24 +304,6 @@ jobs:
 
       - name: Test portable ConPTY preparation
         run: python -m unittest scripts.test_vendor_portable_pty
-
-      - name: Verify pinned Microsoft ConPTY package
-        id: conpty
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $package = .\scripts\resolve_latest_windows_conpty.ps1 -PackageVersion $env:CONPTY_VERSION
-          if ($package.Sha256 -ne $env:CONPTY_SHA256) {
-            throw "Pinned ConPTY hash mismatch: expected $env:CONPTY_SHA256, got $($package.Sha256)"
-          }
-          "version=$($package.Version)" >> $env:GITHUB_OUTPUT
-          "sha256=$($package.Sha256)" >> $env:GITHUB_OUTPUT
-          @(
-            "### Microsoft ConPTY"
-            "- Version: ``$($package.Version)``"
-            "- SHA-256: ``$($package.Sha256)``"
-            "- Prerelease: ``$($package.IsPrerelease)``"
-          ) >> $env:GITHUB_STEP_SUMMARY
 
       - name: Check formatting
         run: cargo fmt --check
@@ -227,6 +364,21 @@ jobs:
           .\scripts\prepare_windows_conpty.ps1 -Destination $package -Architecture x64 -PackageVersion $env:CONPTY_VERSION -PackageSha256 $env:CONPTY_SHA256
           Get-ChildItem -LiteralPath $package -Recurse -File -Filter "*.txt" | Remove-Item -Force
 
+          $expectedFiles = @(
+            "arm64/OpenConsole.exe"
+            "conpty.dll"
+            "herdr.exe"
+            "x64/OpenConsole.exe"
+          )
+          $actualFiles = @(
+            Get-ChildItem -LiteralPath $package -Recurse -File |
+              ForEach-Object { [IO.Path]::GetRelativePath($package, $_.FullName).Replace('\', '/') } |
+              Sort-Object
+          )
+          if (@(Compare-Object $expectedFiles $actualFiles -CaseSensitive).Count -ne 0) {
+            throw "Unexpected nightly package files: $($actualFiles -join ', ')"
+          }
+
           $zip = Join-Path $artifactRoot "$($env:ARTIFACT_NAME).zip"
           Compress-Archive -Path (Join-Path $package "*") -DestinationPath $zip -CompressionLevel Optimal
           $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -237,7 +389,8 @@ jobs:
         run: |
           $package = Join-Path $PWD "artifact\$env:ARTIFACT_NAME"
           $version = & (Join-Path $package "herdr.exe") --version
-          if (-not $version.Contains("nightly.$env:SOURCE_SHA")) {
+          $expectedVersion = "^herdr [0-9]+\.[0-9]+\.[0-9]+-nightly\.$([regex]::Escape($env:SOURCE_SHA))$"
+          if ([string] $version -cnotmatch $expectedVersion) {
             throw "Nightly build identity missing from packaged executable: $version"
           }
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath (Join-Path $package "herdr.exe") -ExpectedHostPath (Join-Path $package "x64\OpenConsole.exe") -Session "nightly-release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
@@ -255,16 +408,16 @@ jobs:
 
   release:
     name: Publish permanent prerelease
-    needs: [sync, build]
+    needs: [sync, prepare, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.sha }}
       UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
-      CONPTY_VERSION: ${{ needs.build.outputs.conpty_version }}
-      CONPTY_SHA256: ${{ needs.build.outputs.conpty_sha256 }}
+      CONPTY_VERSION: ${{ needs.prepare.outputs.conpty_version }}
+      CONPTY_SHA256: ${{ needs.prepare.outputs.conpty_sha256 }}
     steps:
       - name: Download tested package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -292,52 +445,472 @@ jobs:
           zip_digest="sha256:$(sha256sum "$zip" | awk '{print $1}')"
           checksum_digest="sha256:$(sha256sum "$checksum" | awk '{print $1}')"
 
-          printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s' \
+          ownership_marker="Workflow owner: ${GITHUB_REPOSITORY} windows-nightly/v1"
+          workflow_line="Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          workflow_placeholder="Workflow run: <run>"
+          printf -v notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n\n%s' \
             "Automated Windows prerelease." \
             "Fork commit: ${SOURCE_SHA}" \
             "Upstream commit included: ${UPSTREAM_SHA}" \
             "Microsoft ConPTY package: ${CONPTY_VERSION}" \
             "Microsoft ConPTY package SHA-256: ${CONPTY_SHA256}" \
-            "Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            "The ZIP bundles herdr.exe, the signature-verified app-local ConPTY runtime, its license and build metadata, and SHA-256 checksums. The executable falls back to system ConPTY when the bundled runtime is unavailable."
+            "$workflow_line" \
+            "The ZIP contains herdr.exe, conpty.dll, x64/OpenConsole.exe, and arm64/OpenConsole.exe. The executable falls back to system ConPTY when no bundled runtime is present." \
+            "$ownership_marker"
+          printf -v expected_owned_notes '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n\n%s' \
+            "Automated Windows prerelease." \
+            "Fork commit: ${SOURCE_SHA}" \
+            "Upstream commit included: ${UPSTREAM_SHA}" \
+            "Microsoft ConPTY package: ${CONPTY_VERSION}" \
+            "Microsoft ConPTY package SHA-256: ${CONPTY_SHA256}" \
+            "$workflow_placeholder" \
+            "The ZIP contains herdr.exe, conpty.dll, x64/OpenConsole.exe, and arm64/OpenConsole.exe. The executable falls back to system ConPTY when no bundled runtime is present." \
+            "$ownership_marker"
 
-          verify_release() {
-            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
-            if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
-              echo "Existing tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
-              exit 1
+          encoded_tag="$(jq -rn --arg value "$tag" '$value | @uri')"
+
+          get_exact_tag_sha() {
+            local refs_json
+            local exact_count
+            local resolved_sha
+
+            refs_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${encoded_tag}")" || return 2
+            exact_count="$(jq --arg ref "refs/tags/${tag}" '[.[] | select(.ref == $ref)] | length' <<<"$refs_json")"
+            if [[ "$exact_count" == "0" ]]; then
+              printf ''
+              return
             fi
+            if [[ "$exact_count" != "1" ]]; then
+              echo "Expected at most one exact Git ref for ${tag}, found ${exact_count}." >&2
+              return 2
+            fi
+            resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_tag}" --jq .sha)" || return 2
+            printf '%s' "$resolved_sha"
+          }
 
-            release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
-            is_draft="$(jq -r .draft <<<"$release_json")"
-            is_prerelease="$(jq -r .prerelease <<<"$release_json")"
-            asset_count="$(jq '.assets | length' <<<"$release_json")"
-            published_zip_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip") | .digest' <<<"$release_json")"
-            published_checksum_digest="$(jq -r '.assets[] | select(.name == "herdr-windows-x86_64.zip.sha256") | .digest' <<<"$release_json")"
-            if [[ "$is_draft" != "false" || "$is_prerelease" != "true" || "$asset_count" != "2" || "$published_zip_digest" != "$zip_digest" || "$published_checksum_digest" != "$checksum_digest" ]]; then
-              echo "Existing release is incomplete or differs from this tested build." >&2
+          assert_existing_tag_matches_source() {
+            local tag_sha
+            tag_sha="$(get_exact_tag_sha)"
+            if [[ -n "$tag_sha" && "$tag_sha" != "$SOURCE_SHA" ]]; then
+              echo "Existing tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
               exit 1
             fi
           }
 
-          releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
-          existing_release="$(jq -c --arg tag "$tag" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
-          if [[ -n "$existing_release" ]]; then
-            release_draft="$(jq -r .draft <<<"$existing_release")"
-            if [[ "$release_draft" == "true" ]]; then
-              release_target="$(jq -r .target_commitish <<<"$existing_release")"
-              if [[ "$release_target" != "$SOURCE_SHA" ]]; then
-                echo "Existing draft ${tag} targets ${release_target}, expected ${SOURCE_SHA}." >&2
-                exit 1
-              fi
-              gh release upload "$tag" "$zip" "$checksum" --clobber --repo "$GITHUB_REPOSITORY"
-              gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
-            fi
-          else
-            if tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha 2>/dev/null)" && [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
-              echo "Existing tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
+          assert_source_tag() {
+            local tag_sha
+            tag_sha="$(get_exact_tag_sha)"
+            if [[ -z "$tag_sha" ]]; then
+              echo "Required source tag ${tag} does not exist." >&2
               exit 1
             fi
+            if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+              echo "Tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
+              exit 1
+            fi
+          }
+
+          ensure_source_tag() {
+            local tag_sha
+            local create_error
+
+            tag_sha="$(get_exact_tag_sha)"
+            if [[ -z "$tag_sha" ]]; then
+              if ! create_error="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                --field ref="refs/tags/${tag}" \
+                --field sha="$SOURCE_SHA" 2>&1)"; then
+                tag_sha="$(get_exact_tag_sha)"
+                if [[ -z "$tag_sha" ]]; then
+                  printf '%s\n' "$create_error" >&2
+                  echo "Could not create exact source tag ${tag}." >&2
+                  exit 1
+                fi
+              else
+                tag_sha="$(get_exact_tag_sha)"
+              fi
+            fi
+            if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+              echo "Tag ${tag} points to ${tag_sha}, expected ${SOURCE_SHA}." >&2
+              exit 1
+            fi
+          }
+
+          fetch_exact_release() {
+            local pages_json
+            local matches_json
+            local match_count
+            local attempt
+
+            for attempt in 1 2 3 4 5; do
+              pages_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq 'add')" || return 2
+              matches_json="$(jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)]' <<<"$pages_json")"
+              match_count="$(jq 'length' <<<"$matches_json")"
+              if [[ "$match_count" == "1" ]]; then
+                jq -c '.[0]' <<<"$matches_json"
+                return
+              fi
+              if [[ "$match_count" -gt 1 ]]; then
+                echo "Expected one release for ${tag}, found ${match_count}." >&2
+                return 2
+              fi
+              if [[ "$attempt" != "5" ]]; then
+                sleep 2
+              fi
+            done
+            echo "Release ${tag} was not visible after five attempts." >&2
+            return 2
+          }
+
+          verify_release_assets() {
+            local release_json="$1"
+            local name
+            local expected_digest
+            local matching_count
+            local state
+            local digest
+
+            if [[ "$(jq '.assets | length' <<<"$release_json")" != "2" ]]; then
+              echo "Release ${tag} must contain exactly two assets." >&2
+              exit 1
+            fi
+            for name in "$(basename "$zip")" "$(basename "$checksum")"; do
+              if [[ "$name" == "$(basename "$zip")" ]]; then
+                expected_digest="$zip_digest"
+              else
+                expected_digest="$checksum_digest"
+              fi
+              matching_count="$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' <<<"$release_json")"
+              state="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .state' <<<"$release_json")"
+              digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+              if [[ "$matching_count" != "1" || "$state" != "uploaded" || "$digest" != "$expected_digest" ]]; then
+                echo "Release asset ${name} is missing, duplicated, incomplete, or differs from this tested build." >&2
+                exit 1
+              fi
+            done
+          }
+
+          verify_release_notes() {
+            local release_json="$1"
+            local body
+            local normalized_body
+
+            body="$(jq -r .body <<<"$release_json")"
+            normalized_body="$(sed -E "s#^Workflow run: https://github\\.com/${GITHUB_REPOSITORY}/actions/runs/[0-9]+$#${workflow_placeholder}#" <<<"$body")"
+            if [[ "$normalized_body" != "$expected_owned_notes" ]]; then
+              echo "Release ${tag} does not match the complete workflow-owned note template." >&2
+              exit 1
+            fi
+          }
+
+          validate_repairable_draft() {
+            local release_json="$1"
+            local zip_name
+            local checksum_name
+            local unexpected_count
+            local invalid_uploader_count
+            local release_name
+            local title_prefix
+            local title_suffix
+            local title_date
+            local name
+            local matching_count
+            local state
+            local digest
+
+            zip_name="$(basename "$zip")"
+            checksum_name="$(basename "$checksum")"
+            if [[ "$(jq -r .tag_name <<<"$release_json")" != "$tag" || \
+                  "$(jq -r .draft <<<"$release_json")" != "true" || \
+                  "$(jq -r .prerelease <<<"$release_json")" != "true" || \
+                  "$(jq -r .target_commitish <<<"$release_json")" != "$SOURCE_SHA" || \
+                  "$(jq -r .author.login <<<"$release_json")" != "github-actions[bot]" ]]; then
+              echo "Existing release ${tag} is not a repairable workflow draft." >&2
+              exit 1
+            fi
+            verify_release_notes "$release_json"
+            release_name="$(jq -r .name <<<"$release_json")"
+            title_prefix="Herdr Windows nightly "
+            title_suffix=" (${short_sha}, ConPTY ${CONPTY_VERSION})"
+            if [[ "$release_name" != "$title_prefix"* || "$release_name" != *"$title_suffix" ]]; then
+              echo "Draft ${tag} does not use the workflow-owned title template." >&2
+              exit 1
+            fi
+            title_date="${release_name#"$title_prefix"}"
+            title_date="${title_date%"$title_suffix"}"
+            if [[ ! "$title_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "Draft ${tag} has an invalid workflow title date." >&2
+              exit 1
+            fi
+            unexpected_count="$(jq --arg zip "$zip_name" --arg checksum "$checksum_name" '[.assets[] | select(.name != $zip and .name != $checksum)] | length' <<<"$release_json")"
+            if [[ "$unexpected_count" != "0" ]]; then
+              echo "Draft ${tag} contains unexpected assets; refusing automated replacement." >&2
+              exit 1
+            fi
+            invalid_uploader_count="$(jq '[.assets[] | select(.uploader.login != "github-actions[bot]")] | length' <<<"$release_json")"
+            if [[ "$invalid_uploader_count" != "0" ]]; then
+              echo "Draft ${tag} contains an asset not uploaded by github-actions[bot]." >&2
+              exit 1
+            fi
+
+            for name in "$zip_name" "$checksum_name"; do
+              matching_count="$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' <<<"$release_json")"
+              if [[ "$matching_count" -gt 1 ]]; then
+                echo "Draft ${tag} has duplicate assets named ${name}." >&2
+                exit 1
+              fi
+              if [[ "$matching_count" == "1" ]]; then
+                state="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .state' <<<"$release_json")"
+                digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+                if [[ "$state" == "uploaded" && "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                  continue
+                fi
+                if [[ "$state" == "starter" && ( -z "$digest" || "$digest" == "null" ) ]]; then
+                  continue
+                fi
+                echo "Draft asset ${name} has an unsafe state or digest." >&2
+                exit 1
+              fi
+            done
+          }
+
+          draft_requires_replacement() {
+            local release_json="$1"
+            local name
+            local expected_digest
+            local state
+            local digest
+
+            for name in "$(basename "$zip")" "$(basename "$checksum")"; do
+              if [[ "$name" == "$(basename "$zip")" ]]; then
+                expected_digest="$zip_digest"
+              else
+                expected_digest="$checksum_digest"
+              fi
+              state="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .state // empty' <<<"$release_json")"
+              digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
+              if [[ "$state" == "uploaded" && "$digest" != "$expected_digest" ]]; then
+                printf 'true'
+                return
+              fi
+            done
+            printf 'false'
+          }
+
+          wait_for_release_absent() {
+            local pages_json
+            local match_count
+            local attempt
+
+            for attempt in 1 2 3 4 5; do
+              pages_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq 'add')"
+              match_count="$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' <<<"$pages_json")"
+              if [[ "$match_count" == "0" ]]; then
+                return
+              fi
+              if [[ "$match_count" -gt 1 ]]; then
+                echo "Multiple releases remain for ${tag} during cleanup." >&2
+                exit 1
+              fi
+              if [[ "$attempt" != "5" ]]; then
+                sleep 2
+              fi
+            done
+            echo "Deleted draft ${tag} remained visible after five attempts." >&2
+            exit 1
+          }
+
+          wait_for_tag_absent() {
+            local tag_sha
+            local attempt
+
+            for attempt in 1 2 3 4 5; do
+              tag_sha="$(get_exact_tag_sha)"
+              if [[ -z "$tag_sha" ]]; then
+                return
+              fi
+              if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+                echo "Tag ${tag} changed to ${tag_sha} during draft cleanup." >&2
+                exit 1
+              fi
+              if [[ "$attempt" != "5" ]]; then
+                sleep 2
+              fi
+            done
+            echo "Deleted source tag ${tag} remained visible after five attempts." >&2
+            exit 1
+          }
+
+          verify_draft_ready() {
+            local release_json
+            local expected_count
+            local uploaded_count
+            local unexpected_count
+            local attempt
+
+            for attempt in 1 2 3 4 5; do
+              release_json="$(fetch_exact_release)"
+              unexpected_count="$(jq --arg zip "$(basename "$zip")" --arg checksum "$(basename "$checksum")" '[.assets[] | select(.name != $zip and .name != $checksum)] | length' <<<"$release_json")"
+              if [[ "$unexpected_count" != "0" ]]; then
+                echo "Draft ${tag} contains unexpected assets." >&2
+                exit 1
+              fi
+              expected_count="$(jq --arg zip "$(basename "$zip")" --arg checksum "$(basename "$checksum")" '[.assets[] | select(.name == $zip or .name == $checksum)] | length' <<<"$release_json")"
+              uploaded_count="$(jq --arg zip "$(basename "$zip")" --arg checksum "$(basename "$checksum")" --arg zip_digest "$zip_digest" --arg checksum_digest "$checksum_digest" '[.assets[] | select((.name == $zip and .state == "uploaded" and .digest == $zip_digest) or (.name == $checksum and .state == "uploaded" and .digest == $checksum_digest))] | length' <<<"$release_json")"
+              if [[ "$(jq -r .draft <<<"$release_json")" == "true" && \
+                    "$(jq -r .prerelease <<<"$release_json")" == "true" && \
+                    "$(jq -r .target_commitish <<<"$release_json")" == "$SOURCE_SHA" && \
+                    "$(jq -r .name <<<"$release_json")" == "$title" && \
+                    "$expected_count" == "2" && "$uploaded_count" == "2" ]]; then
+                verify_release_assets "$release_json"
+                verify_release_notes "$release_json"
+                return
+              fi
+              if [[ "$expected_count" == "2" && "$(jq '[.assets[] | select(.state == "uploaded")] | length' <<<"$release_json")" == "2" && "$uploaded_count" != "2" ]]; then
+                echo "Draft ${tag} has uploaded assets that differ from this tested build." >&2
+                exit 1
+              fi
+              if [[ "$attempt" != "5" ]]; then
+                sleep 2
+              fi
+            done
+            echo "Draft ${tag} did not reach a fresh ready state after five attempts." >&2
+            exit 1
+          }
+
+          verify_release() {
+            local release_json
+            local attempt
+            assert_source_tag
+            for attempt in 1 2 3 4 5; do
+              release_json="$(fetch_exact_release)"
+              if [[ "$(jq -r .draft <<<"$release_json")" == "false" && \
+                    "$(jq -r .prerelease <<<"$release_json")" == "true" ]]; then
+                break
+              fi
+              if [[ "$attempt" != "5" ]]; then
+                sleep 2
+              fi
+            done
+            if [[ "$(jq -r .draft <<<"$release_json")" != "false" || "$(jq -r .prerelease <<<"$release_json")" != "true" ]]; then
+              echo "Release ${tag} did not reach a fresh published prerelease state." >&2
+              exit 1
+            fi
+            verify_release_assets "$release_json"
+            verify_release_notes "$release_json"
+          }
+
+          verify_or_upload_draft_asset() {
+            local path="$1"
+            local expected_digest="$2"
+            local name
+            local release_json
+            local matching_assets
+            local state
+            local existing_digest
+            local asset_id
+
+            name="$(basename "$path")"
+            release_json="$(fetch_exact_release)"
+            matching_assets="$(jq --arg name "$name" '[.assets[] | select(.name == $name)] | length' <<<"$release_json")"
+            if [[ "$matching_assets" == "0" ]]; then
+              gh release upload "$tag" "$path" --repo "$GITHUB_REPOSITORY"
+              return
+            fi
+            if [[ "$matching_assets" != "1" ]]; then
+              echo "Draft ${tag} has duplicate assets named ${name}." >&2
+              exit 1
+            fi
+
+            state="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .state' <<<"$release_json")"
+            existing_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            if [[ "$state" == "uploaded" && "$existing_digest" == "$expected_digest" ]]; then
+              return
+            fi
+            if [[ "$state" == "starter" && ( -z "$existing_digest" || "$existing_digest" == "null" ) ]]; then
+              asset_id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' <<<"$release_json")"
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+              gh release upload "$tag" "$path" --repo "$GITHUB_REPOSITORY"
+              return
+            fi
+            echo "Draft asset ${name} differs from this tested build; refusing to overwrite it." >&2
+            exit 1
+          }
+
+          releases_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq 'add')"
+          matching_releases="$(jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)]' <<<"$releases_json")"
+          matching_release_count="$(jq 'length' <<<"$matching_releases")"
+          if [[ "$matching_release_count" -gt 1 ]]; then
+            echo "Multiple releases exist for tag ${tag}." >&2
+            exit 1
+          fi
+
+          assert_existing_tag_matches_source
+          create_draft="false"
+          if [[ "$matching_release_count" == "1" ]]; then
+            existing_release="$(jq -c '.[0]' <<<"$matching_releases")"
+            release_draft="$(jq -r .draft <<<"$existing_release")"
+            if [[ "$release_draft" == "true" ]]; then
+              validate_repairable_draft "$existing_release"
+              if [[ "$(draft_requires_replacement "$existing_release")" == "true" ]]; then
+                release_id="$(jq -r .id <<<"$existing_release")"
+                if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
+                  echo "Draft ${tag} has an invalid release ID." >&2
+                  exit 1
+                fi
+                existing_release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+                if [[ "$(jq -r .id <<<"$existing_release")" != "$release_id" ]]; then
+                  echo "Draft ${tag} changed identity before cleanup." >&2
+                  exit 1
+                fi
+                validate_repairable_draft "$existing_release"
+                if [[ "$(draft_requires_replacement "$existing_release")" == "true" ]]; then
+                  echo "Replacing exact workflow-owned draft ${tag}; uploaded asset bytes differ from this tested build."
+                  gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+                  wait_for_release_absent
+                  tag_sha="$(get_exact_tag_sha)"
+                  if [[ -n "$tag_sha" ]]; then
+                    if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+                      echo "Tag ${tag} changed to ${tag_sha} before cleanup." >&2
+                      exit 1
+                    fi
+                    gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${encoded_tag}"
+                    wait_for_tag_absent
+                  fi
+                  create_draft="true"
+                else
+                  verify_or_upload_draft_asset "$zip" "$zip_digest"
+                  verify_or_upload_draft_asset "$checksum" "$checksum_digest"
+                  gh release edit "$tag" \
+                    --title "$title" \
+                    --notes "$notes" \
+                    --prerelease \
+                    --latest=false \
+                    --repo "$GITHUB_REPOSITORY"
+                  ensure_source_tag
+                  verify_draft_ready
+                  assert_source_tag
+                  gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
+                fi
+              else
+                verify_or_upload_draft_asset "$zip" "$zip_digest"
+                verify_or_upload_draft_asset "$checksum" "$checksum_digest"
+                gh release edit "$tag" \
+                  --title "$title" \
+                  --notes "$notes" \
+                  --prerelease \
+                  --latest=false \
+                  --repo "$GITHUB_REPOSITORY"
+                ensure_source_tag
+                verify_draft_ready
+                assert_source_tag
+                gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
+              fi
+            fi
+          else
+            create_draft="true"
+          fi
+
+          if [[ "$create_draft" == "true" ]]; then
             gh release create "$tag" \
               --target "$SOURCE_SHA" \
               --title "$title" \
@@ -346,7 +919,11 @@ jobs:
               --prerelease \
               --latest=false \
               --repo "$GITHUB_REPOSITORY"
-            gh release upload "$tag" "$zip" "$checksum" --repo "$GITHUB_REPOSITORY"
+            verify_or_upload_draft_asset "$zip" "$zip_digest"
+            verify_or_upload_draft_asset "$checksum" "$checksum_digest"
+            ensure_source_tag
+            verify_draft_ready
+            assert_source_tag
             gh release edit "$tag" --draft=false --prerelease --latest=false --repo "$GITHUB_REPOSITORY"
           fi
           verify_release
