@@ -1,7 +1,7 @@
 //! Windows-to-Windows remote thin-client launcher over OpenSSH command stdio.
 
-use std::io;
 use std::ffi::OsStr;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
