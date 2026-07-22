@@ -1,0 +1,250 @@
+From 77d88327480b68c3a305f6243a3b26330f98a332 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Wed, 22 Jul 2026 08:04:00 +0000
+Subject: [PATCH 5/8] feat: follow host appearance for unconfigured themes
+
+Treat an omitted auto_switch value differently from an explicit false. A fully
+unconfigured theme now follows the host with catppuccin for dark appearance and
+one-light for light appearance, while explicit themes retain manual behavior
+and users can opt out with auto_switch = false.
+
+Update the sample configuration, unreleased documentation, localized guidance,
+and configuration reference to describe the new default.
+
+Fork-Ref: 8b546580e607f3e57329350099e574d64870b4b9; f3fac551ece1b3f05276bb60f33ed16fbd487f70; 6c5db6504453949da40bde5139ddd8a30b3ddc8b; 93a6533dbc3f368d3a6b0b84b2c6cb6756c405fc; 0fada12dffb765e9d4d7868c87a564e74bff8833
+Upstream-Base: ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4
+Disposition: carry
+Upstream-Ref: ogulcancelik/herdr/discussions/1532; ogulcancelik/herdr#1530
+---
+ docs/next/CHANGELOG.md                        |  1 +
+ .../src/content/docs/configuration.mdx        |  2 +-
+ .../src/content/docs/ja/configuration.mdx     |  2 +-
+ .../src/content/docs/zh-cn/configuration.mdx  |  2 +-
+ .../website/src/data/config-reference.json    |  4 +-
+ src/app/mod.rs                                | 56 ++++++++++++++++---
+ src/config/theme.rs                           |  6 +-
+ src/main.rs                                   |  2 +-
+ 8 files changed, 57 insertions(+), 18 deletions(-)
+
+diff --git a/docs/next/CHANGELOG.md b/docs/next/CHANGELOG.md
+index 8a9fdf82f9612de046478b38431810ba72f208e7..7472ae3e6c853200d58109b4bf53a12a2d80692b 100644
+--- a/docs/next/CHANGELOG.md
++++ b/docs/next/CHANGELOG.md
+@@ -18,6 +18,7 @@
+ 
+ ### Changed
+ - Agent commands now accept only a unique live agent name or the pane ID currently hosting that agent. Names are cleared when the occupant exits, is released, or is replaced. The old top-level `wait` commands were replaced by `agent wait` and `pane wait-output`, and `agent send` was replaced by `agent send-keys`.
++- When no `[theme]` fields are configured, Herdr now follows host light/dark appearance by default. Set `auto_switch = false` to opt out, or enable it explicitly alongside configured theme names.
+ - The session navigator now uses connected tree glyphs, groups matches by workspace, and automatically selects the first result when a search begins. (#1611)
+ 
+ ### Fixed
+diff --git a/docs/next/website/src/content/docs/configuration.mdx b/docs/next/website/src/content/docs/configuration.mdx
+index a5591880e24dc50f5e59e3e069afa0f6907b93f9..32592650485612d84f9a320029c5a70b129abed4 100644
+--- a/docs/next/website/src/content/docs/configuration.mdx
++++ b/docs/next/website/src/content/docs/configuration.mdx
+@@ -236,7 +236,7 @@ light_name = "catppuccin-latte"
+ dark_name = "catppuccin"
+ ```
+ 
+-`auto_switch` defaults to `false`, so existing theme configs keep manual behavior. If `light_name` or `dark_name` is omitted, Herdr uses the matching built-in sibling for the configured `name` when one exists, such as `tokyo-night`/`tokyo-night-day` or `gruvbox`/`gruvbox-light`. Manual theme selection in Settings disables `auto_switch`.
++When no theme fields are configured, Herdr follows the host appearance automatically. Set `auto_switch = false` to opt out, or set it to `true` to enable switching alongside explicit theme settings. If `light_name` or `dark_name` is omitted, Herdr uses the matching built-in sibling for the configured `name` when one exists, such as `tokyo-night`/`tokyo-night-day` or `gruvbox`/`gruvbox-light`. Manual theme selection in Settings disables `auto_switch`.
+ 
+ You can override individual colors:
+ 
+diff --git a/docs/next/website/src/content/docs/ja/configuration.mdx b/docs/next/website/src/content/docs/ja/configuration.mdx
+index 0eba298d799304bafa6dbb1c93f067a293864acd..4e50c675eee01ef64dd788d9a5c190086abd6988 100644
+--- a/docs/next/website/src/content/docs/ja/configuration.mdx
++++ b/docs/next/website/src/content/docs/ja/configuration.mdx
+@@ -232,7 +232,7 @@ light_name = "catppuccin-latte"
+ dark_name = "catppuccin"
+ ```
+ 
+-`auto_switch` のデフォルトは `false` なので、既存のテーマ設定は手動の挙動を保ちます。`light_name` または `dark_name` を省略すると、設定された `name` に対応する組み込みの姉妹テーマが存在する場合はそれを使います。たとえば `tokyo-night`/`tokyo-night-day` や `gruvbox`/`gruvbox-light` です。設定画面でテーマを手動選択すると `auto_switch` は無効になります。
++テーマ項目が未設定の場合、Herdr は既定でホストの外観に追従します。無効にするには `auto_switch = false`、明示的なテーマ設定とともに有効にするには `true` を指定します。`light_name` または `dark_name` を省略すると、設定された `name` に対応する組み込みの姉妹テーマが存在する場合はそれを使います。たとえば `tokyo-night`/`tokyo-night-day` や `gruvbox`/`gruvbox-light` です。設定画面でテーマを手動選択すると `auto_switch` は無効になります。
+ 
+ 個々の色を上書きできます:
+ 
+diff --git a/docs/next/website/src/content/docs/zh-cn/configuration.mdx b/docs/next/website/src/content/docs/zh-cn/configuration.mdx
+index bb04da076375a186f774053743ec41c35bec7c93..ce5852b94055385831d6637c8dc5a4ddb824e5dd 100644
+--- a/docs/next/website/src/content/docs/zh-cn/configuration.mdx
++++ b/docs/next/website/src/content/docs/zh-cn/configuration.mdx
+@@ -232,7 +232,7 @@ light_name = "catppuccin-latte"
+ dark_name = "catppuccin"
+ ```
+ 
+-`auto_switch` 默认为 `false`，因此现有主题配置会保持手动行为。如果省略 `light_name` 或 `dark_name`，且配置的 `name` 存在对应的内置姊妹主题，Herdr 会使用该主题，例如 `tokyo-night`/`tokyo-night-day` 或 `gruvbox`/`gruvbox-light`。在设置中手动选择主题会禁用 `auto_switch`。
++未配置任何主题字段时，Herdr 默认跟随宿主终端的外观。设置 `auto_switch = false` 可退出自动切换；若要在显式主题配置中启用切换，请设置为 `true`。如果省略 `light_name` 或 `dark_name`，且配置的 `name` 存在对应的内置姊妹主题，Herdr 会使用该主题，例如 `tokyo-night`/`tokyo-night-day` 或 `gruvbox`/`gruvbox-light`。在设置中手动选择主题会禁用 `auto_switch`。
+ 
+ 你可以覆盖单个颜色：
+ 
+diff --git a/docs/next/website/src/data/config-reference.json b/docs/next/website/src/data/config-reference.json
+index b91cdf4661d01dc0dca43b1234ebfbf2adb4aa8b..e65693330d9bacca3811018e3a3e6de9defa6632 100644
+--- a/docs/next/website/src/data/config-reference.json
++++ b/docs/next/website/src/data/config-reference.json
+@@ -25,8 +25,8 @@
+         {
+           "key": "theme.auto_switch",
+           "type": "boolean",
+-          "default": "false",
+-          "description": "Follow host terminal light/dark appearance and switch between theme names."
++          "default": "automatic when no theme is configured",
++          "description": "Follow host terminal light/dark appearance and switch between theme names. Set false to opt out of the automatic default."
+         },
+         {
+           "key": "theme.dark_name",
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 8a9e7389038a64e62c012827f4c85abf71ef0809..21a64c6bcb5d28497e9711bf258763a43ba3f8c3 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -284,17 +284,25 @@ fn theme_runtime_config(
+     config: &crate::config::Config,
+     use_legacy_ui_accent: bool,
+ ) -> state::ThemeRuntimeConfig {
++    let has_explicit_theme = config.theme.name.is_some()
++        || config.theme.dark_name.is_some()
++        || config.theme.light_name.is_some()
++        || config.theme.custom.is_some();
+     let manual_name = config
+         .theme
+         .name
+         .clone()
+         .unwrap_or_else(|| "catppuccin".to_string());
+-    let (default_dark, default_light) = sibling_theme_names(&manual_name);
++    let (default_dark, default_light) = if has_explicit_theme {
++        sibling_theme_names(&manual_name)
++    } else {
++        ("catppuccin".to_string(), "one-light".to_string())
++    };
+     state::ThemeRuntimeConfig {
+         manual_name,
+         dark_name: config.theme.dark_name.clone().unwrap_or(default_dark),
+         light_name: config.theme.light_name.clone().unwrap_or(default_light),
+-        auto_switch: config.theme.auto_switch,
++        auto_switch: config.theme.auto_switch.unwrap_or(!has_explicit_theme),
+         custom: config.theme.custom.clone(),
+         legacy_accent: (use_legacy_ui_accent
+             && config.ui.accent != "cyan"
+@@ -2422,7 +2430,37 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn theme_auto_switch_is_opt_in_and_preserves_manual_default() {
++    fn app_theme_unconfigured_follows_host_and_uses_one_light() {
++        let config = Config::default();
++        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
++        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
++
++        assert!(app.state.theme_runtime.auto_switch);
++        assert_eq!(app.state.theme_name, "catppuccin");
++        assert_eq!(app.state.palette, state::Palette::catppuccin());
++        assert!(
++            app.set_host_terminal_appearance(crate::terminal_theme::HostAppearance::Light, false,)
++        );
++        assert_eq!(app.state.theme_name, "one-light");
++        assert_eq!(app.state.palette, state::Palette::one_light());
++    }
++
++    #[test]
++    fn app_theme_explicit_false_disables_default_auto_switch() {
++        let mut config = Config::default();
++        config.theme.auto_switch = Some(false);
++        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
++        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
++
++        assert!(!app.state.theme_runtime.auto_switch);
++        assert!(
++            !app.set_host_terminal_appearance(crate::terminal_theme::HostAppearance::Light, false,)
++        );
++        assert_eq!(app.state.theme_name, "catppuccin");
++    }
++
++    #[test]
++    fn app_theme_explicit_preserves_manual_default_without_auto_switch() {
+         let mut config = Config::default();
+         config.theme.name = Some("tokyo-night".to_string());
+         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+@@ -2435,10 +2473,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn theme_auto_switch_uses_sibling_map_and_explicit_appearance() {
++    fn app_theme_auto_switch_uses_sibling_map_and_explicit_appearance() {
+         let mut config = Config::default();
+         config.theme.name = Some("tokyo-night".to_string());
+-        config.theme.auto_switch = true;
++        config.theme.auto_switch = Some(true);
+         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+ 
+@@ -2452,10 +2490,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn theme_auto_switch_applies_custom_overrides_after_active_base() {
++    fn app_theme_auto_switch_applies_custom_overrides_after_active_base() {
+         let mut config = Config::default();
+         config.theme.name = Some("gruvbox".to_string());
+-        config.theme.auto_switch = true;
++        config.theme.auto_switch = Some(true);
+         config.theme.custom = Some(crate::config::CustomThemeColors {
+             accent: Some("#010203".to_string()),
+             ..Default::default()
+@@ -2473,10 +2511,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn inferred_background_appearance_does_not_override_explicit_report() {
++    fn app_theme_inferred_background_does_not_override_explicit_report() {
+         let mut config = Config::default();
+         config.theme.name = Some("catppuccin".to_string());
+-        config.theme.auto_switch = true;
++        config.theme.auto_switch = Some(true);
+         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+ 
+diff --git a/src/config/theme.rs b/src/config/theme.rs
+index fc601d3f576f7ea10ea9ceba45a15c437788fa6d..1e51c2f9a24099a78b237939800191a46c0eb20c 100644
+--- a/src/config/theme.rs
++++ b/src/config/theme.rs
+@@ -17,7 +17,7 @@ pub struct ThemeConfig {
+     /// Built-in theme name. Default: "catppuccin".
+     pub name: Option<String>,
+     /// Follow host terminal light/dark appearance and switch between theme names.
+-    pub auto_switch: bool,
++    pub auto_switch: Option<bool>,
+     /// Theme name used when `auto_switch` selects a dark appearance.
+     pub dark_name: Option<String>,
+     /// Theme name used when `auto_switch` selects a light appearance.
+@@ -151,7 +151,7 @@ light_name = "catppuccin-latte"
+ "#;
+         let config: Config = toml::from_str(toml).unwrap();
+         assert_eq!(config.theme.name.as_deref(), Some("catppuccin"));
+-        assert!(config.theme.auto_switch);
++        assert_eq!(config.theme.auto_switch, Some(true));
+         assert_eq!(config.theme.dark_name.as_deref(), Some("tokyo-night"));
+         assert_eq!(config.theme.light_name.as_deref(), Some("catppuccin-latte"));
+     }
+@@ -180,7 +180,7 @@ red = "rgb(255, 85, 85)"
+     fn theme_defaults_when_missing() {
+         let config: Config = toml::from_str("").unwrap();
+         assert!(config.theme.name.is_none());
+-        assert!(!config.theme.auto_switch);
++        assert!(config.theme.auto_switch.is_none());
+         assert!(config.theme.dark_name.is_none());
+         assert!(config.theme.light_name.is_none());
+         assert!(config.theme.custom.is_none());
+diff --git a/src/main.rs b/src/main.rs
+index a73423bf5f683503eecf2136be8667e326b6f421..f555a13913264ef1903e83629a187aea57522fb8 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -119,7 +119,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
+ # name = "catppuccin"
+ 
+ # Follow host terminal light/dark appearance and switch Herdr UI themes.
+-# Existing manual behavior is unchanged unless this is true.
++# Unconfigured themes follow the host by default; set false to opt out.
+ # auto_switch = false
+ # dark_name = "catppuccin"
+ # light_name = "catppuccin-latte"
+-- 
+2.55.0.windows.3

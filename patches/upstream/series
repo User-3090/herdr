@@ -1,0 +1,8 @@
+0001-windows-host-color-transport.patch
+0002-software-cursor-contrast.patch
+0003-preserve-host-cursor-color.patch
+0004-child-osc12-cursor-color.patch
+0005-default-theme-host-appearance.patch
+0006-windows-system-notifications.patch
+0007-windows-mediaplayer-path-binding.patch
+0008-controlled-app-local-conpty.patch

@@ -1,5 +1,31 @@
 # herdr
 
+<!-- BEGIN USER-3090 FORK STATUS -->
+## custom fork status and maintained fixes
+
+This is a **custom fork** of
+[`ogulcancelik/herdr`](https://github.com/ogulcancelik/herdr), focused on a
+reliable Windows build while continuing to merge upstream work.
+
+Maintained logical fixes, at a high level:
+
+- bounded Windows host color and appearance transport;
+- visible software cursors plus host and child cursor-color preservation;
+- automatic host-appearance defaults for otherwise unconfigured themes;
+- native Windows desktop notifications and reliable MediaPlayer paths; and
+- controlled app-local ConPTY support with system fallback.
+
+The Windows experimental/nightly test, packaging, upstream-sync, and release
+workflows are **fork-only CI**, not upstream product fixes or an indication of
+upstream Windows release support.
+
+See the maintained [upstream patch archive](patches/upstream/README.md), use
+the [fork releases](https://github.com/User-3090/herdr/releases) for fork
+builds, and consult the [upstream project](https://github.com/ogulcancelik/herdr)
+for upstream status. **Maintainers must update this section whenever the
+`index.json` active entries change.**
+
+<!-- END USER-3090 FORK STATUS -->
 
 <p align="center">
   <img src="assets/logo.png" alt="herdr" width="100" />

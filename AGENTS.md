@@ -50,6 +50,12 @@ Examples:
 - Sidebar layout, token placement, colors, selection, modals, mouse/viewport state: TUI/client.
 - Workspace/tab/pane remain shared session organization for now, but avoid making them mandatory identity for unrelated runtime features.
 
+## Maintained Upstream Patches
+
+Before changing fork-only product fixes or merging upstream, read
+`patches/upstream/README.md` and keep its index, series, mailboxes, and root
+README status block synchronized.
+
 ## Maintainer Workflow
 
 This section applies only when the acting GitHub account is `ogulcancelik` or

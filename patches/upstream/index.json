@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "repository": "https://github.com/ogulcancelik/herdr",
+    "branch": "master"
+  },
+  "active": [
+    {
+      "id": "windows-host-color-transport",
+      "title": "Windows host color transport",
+      "summary": "Queries Windows host foreground, background, and appearance state, frames replies without leaking control-string tails, and transports them as semantic client events under protocol 18.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0001-windows-host-color-transport.patch",
+          "commit": "85976aedba6c7a30d4231c163814e04ad1d49b6a"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/1530",
+        "https://github.com/ogulcancelik/herdr/issues/675",
+        "https://github.com/ogulcancelik/herdr/discussions/577",
+        "https://github.com/ogulcancelik/herdr/issues/549"
+      ],
+      "reference_notes": [
+        "Issue #1530 records the native Windows symptom. Issue #675, discussion #577, and issue #549 provide related host-theme and reply-framing context whose already-upstream portions are not re-carried."
+      ],
+      "touched_paths": [
+        "docs/next/api/herdr-api.schema.json",
+        "src/client/input.rs",
+        "src/client/input/windows_vti.rs",
+        "src/client/mod.rs",
+        "src/protocol/wire.rs",
+        "src/raw_input.rs",
+        "src/terminal_theme.rs",
+        "tests/api_ping.rs",
+        "tests/cli/sessions.rs",
+        "tests/support/mod.rs"
+      ],
+      "verification": [
+        "just test-one windows_host_color_replies_convert_to_semantic_events",
+        "just test-one vti_host_color_replies_emit_semantic_theme_events",
+        "just test-one semantic_event_flushes_pending_escape_first",
+        "just test-one unterminated_default_color_response_is_bounded",
+        "just test-one client_input_events_roundtrip",
+        "just test-one generated_protocol_schema_artifact_is_current",
+        "just test-one ping_over_socket_returns_version",
+        "just test-one status_commands_report_client_and_server_versions",
+        "cargo clippy --all-targets --locked -- -D warnings"
+      ],
+      "remove_when": "Upstream queries OSC 10/11 on Windows, transports bounded default-color and appearance events through both Windows input backends, and uses a protocol version newer than released protocol 17 for those wire variants."
+    },
+    {
+      "id": "software-cursor-contrast",
+      "title": "Software cursor contrast",
+      "summary": "Chooses a black or white software-cursor block from known cell backgrounds while retaining reverse-video fallback for unresolved colors.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0002-software-cursor-contrast.patch",
+          "commit": "f2b600f6b41644f32972496e97d93557c00667f0"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/1530"
+      ],
+      "reference_notes": [
+        "No dedicated upstream issue currently tracks software-cursor contrast; issue #1530 is contextual."
+      ],
+      "touched_paths": [
+        "src/protocol/render_ansi.rs"
+      ],
+      "verification": [
+        "just test-one drawn_cursor_uses_black_block_on_light_background",
+        "just test-one drawn_cursor_uses_white_block_on_dark_background",
+        "just test-one drawn_cursor_reverses_visible_cursor_cell"
+      ],
+      "remove_when": "Upstream software-cursor rendering chooses a contrasting block for known named or RGB cell backgrounds and retains reverse-video fallback for unresolved colors."
+    },
+    {
+      "id": "preserve-host-cursor-color",
+      "title": "Preserve host cursor color",
+      "summary": "Queries the outer terminal's OSC 12 color, uses it for software cursors, and restores the exact host cursor color after redraw, normal exit, or panic.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0003-preserve-host-cursor-color.patch",
+          "commit": "a524c96f4b21b2dec73b2ef4ebf32a359b4985dc"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/1530"
+      ],
+      "reference_notes": [
+        "No dedicated upstream issue currently tracks preservation of the outer cursor color; issue #1530 is contextual."
+      ],
+      "touched_paths": [
+        "src/client/input.rs",
+        "src/client/input/windows_vti.rs",
+        "src/client/mod.rs",
+        "src/protocol/render_ansi.rs",
+        "src/raw_input.rs",
+        "src/terminal_theme.rs"
+      ],
+      "verification": [
+        "just test-one parses_host_cursor_color_response",
+        "just test-one windows_host_color_replies_convert_to_semantic_events",
+        "just test-one vti_host_color_replies_emit_semantic_theme_events",
+        "just test-one drawn_cursor_uses_host_cursor_fill_color",
+        "just test-one terminal_restore_postlude_restores_queried_cursor_color"
+      ],
+      "remove_when": "Upstream queries OSC 12 on every foreground client, uses the result for drawn cursors, and restores the exact queried outer-terminal cursor color on normal exit and panic."
+    },
+    {
+      "id": "child-osc12-cursor-color",
+      "title": "Child OSC 12 cursor colors",
+      "summary": "Tracks child OSC 12 sets and OSC 112 resets through pane state and semantic rendering so native and software cursors reflect child-selected colors safely.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0004-child-osc12-cursor-color.patch",
+          "commit": "30d0fb1550cd2bc07458ea2f6a9c3eca0ee9b1de"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/1234",
+        "https://github.com/ogulcancelik/herdr/issues/806",
+        "https://github.com/ogulcancelik/herdr/issues/1530"
+      ],
+      "reference_notes": [
+        "Issue #1234 is the exact remaining behavior. Issue #806 covers the already-upstream query-response behavior; issue #1530 is host-appearance context."
+      ],
+      "touched_paths": [
+        "src/pane.rs",
+        "src/pane/cursor.rs",
+        "src/pane/osc.rs",
+        "src/pane/terminal.rs",
+        "src/protocol/render_ansi.rs",
+        "src/protocol/wire.rs",
+        "src/server/headless.rs",
+        "src/server/render_stream.rs",
+        "src/ui/tab_surface.rs",
+        "tests/client_mode.rs",
+        "tests/cross_area.rs",
+        "tests/multi_client.rs"
+      ],
+      "verification": [
+        "just test-one child_cursor_override_is_exposed_until_reset",
+        "just test-one restore_cursor_override_without_known_host_colors",
+        "just test-one restore_cursor_keeps_unknown_foreground_pending",
+        "just test-one drawn_cursor_prefers_child_color_over_host_fallback",
+        "just test-one native_cursor_color_tracks_child_override_and_reset",
+        "just test-one full_redraw_reset_preserves_physical_cursor_color_memory",
+        "just test-one virtual_render_preserves_explicit_frame_cursor_position",
+        "just test-one server_frame_roundtrip_nontrivial",
+        "cargo test --locked --test client_mode --test cross_area --test multi_client"
+      ],
+      "remove_when": "Upstream tracks child OSC 12/112 state through pane, semantic-frame, and terminal-ANSI rendering, preserves encoder memory across full redraws, and independently restores transient cursor overrides."
+    },
+    {
+      "id": "default-theme-host-appearance",
+      "title": "Default theme follows host appearance",
+      "summary": "Distinguishes an omitted auto-switch setting from explicit false so otherwise unconfigured themes follow the terminal's light or dark appearance.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0005-default-theme-host-appearance.patch",
+          "commit": "77d88327480b68c3a305f6243a3b26330f98a332"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/discussions/1532",
+        "https://github.com/ogulcancelik/herdr/issues/1530",
+        "https://github.com/ogulcancelik/herdr/issues/675",
+        "https://github.com/ogulcancelik/herdr/discussions/577"
+      ],
+      "reference_notes": [
+        "Discussion #1532 describes the exact default-theme behavior. Issue #675 and discussion #577 are the earlier proposal context; issue #1530 records the Windows symptom."
+      ],
+      "touched_paths": [
+        "docs/next/CHANGELOG.md",
+        "docs/next/website/src/content/docs/configuration.mdx",
+        "docs/next/website/src/content/docs/ja/configuration.mdx",
+        "docs/next/website/src/content/docs/zh-cn/configuration.mdx",
+        "docs/next/website/src/data/config-reference.json",
+        "src/app/mod.rs",
+        "src/config/theme.rs",
+        "src/main.rs"
+      ],
+      "verification": [
+        "just test-one app_theme_unconfigured_follows_host_and_uses_one_light",
+        "just test-one app_theme_explicit_false_disables_default_auto_switch",
+        "just test-one app_theme_explicit_preserves_manual_default_without_auto_switch",
+        "just test-one theme_defaults_when_missing",
+        "python3 -m unittest scripts.test_config_reference_check scripts.test_docs_translation_parity"
+      ],
+      "remove_when": "Upstream distinguishes omitted theme.auto_switch from explicit false, follows host appearance only for otherwise unconfigured themes, and documents the automatic catppuccin/one-light default in every maintained locale and config reference."
+    },
+    {
+      "id": "windows-system-notifications",
+      "title": "Windows system notifications",
+      "summary": "Replaces the Windows notification stub with Unicode-safe Shell_NotifyIconW informational balloons while keeping sound policy separate.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0006-windows-system-notifications.patch",
+          "commit": "806c916271bda33c186816eb04924aceda767e34"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/1330"
+      ],
+      "reference_notes": [
+        "Issue #1330 reports the missing Windows toast, but the source commits did not contain an upstream issue trailer."
+      ],
+      "touched_paths": [
+        "src/platform/windows.rs"
+      ],
+      "verification": [
+        "cargo test --locked --target x86_64-pc-windows-msvc --bin herdr windows_notification_text_is_null_terminated_and_unicode_safe",
+        "Manually trigger a background agent notification and observe one native Windows toast without an extra shell sound."
+      ],
+      "remove_when": "Upstream Windows notification delivery displays Unicode-safe native system notifications and keeps duplicate shell audio disabled independently from Herdr sound playback."
+    },
+    {
+      "id": "windows-mediaplayer-path-binding",
+      "title": "Windows MediaPlayer path binding",
+      "summary": "Passes spaced and Unicode media paths through a process-scoped environment variable so PowerShell's inline command cannot lose the path argument.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0007-windows-mediaplayer-path-binding.patch",
+          "commit": "5ef4f38bd31741f681ddd673ea3a0b529c4cc4db"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/1657",
+        "https://github.com/ogulcancelik/herdr/issues/1062",
+        "https://github.com/ogulcancelik/herdr/issues/1330"
+      ],
+      "reference_notes": [
+        "Issue #1657 documents the exact unbound -Command argument root cause; issues #1062 and #1330 are earlier Windows playback reports."
+      ],
+      "touched_paths": [
+        "src/sound.rs"
+      ],
+      "verification": [
+        "cargo test --locked --target x86_64-pc-windows-msvc --bin herdr windows_media_player_uses_process_environment_for_literal_path",
+        "GitHub Actions run 29894851735 validated the focused fix on Windows."
+      ],
+      "remove_when": "Upstream Windows MediaPlayer playback binds literal spaced and Unicode paths without relying on positional arguments following powershell.exe -Command."
+    },
+    {
+      "id": "controlled-app-local-conpty",
+      "title": "Controlled app-local ConPTY",
+      "summary": "Loads a complete app-local ConPTY bundle only from the executable directory, never probes PATH, and otherwise falls back to system ConPTY.",
+      "upstream_base": "ef85fa0c7ebb48bb59fe7593af5a67f3e02ff3d4",
+      "mailboxes": [
+        {
+          "file": "0008-controlled-app-local-conpty.patch",
+          "commit": "f359481fd9460c3d73395ce1678582317554afc7"
+        }
+      ],
+      "upstream_refs": [
+        "https://github.com/ogulcancelik/herdr/issues/761",
+        "https://github.com/ogulcancelik/herdr/issues/1528"
+      ],
+      "reference_notes": [
+        "Issue #761's unsafe bare-DLL search is already fixed upstream; this patch adds an explicit complete-bundle opt-in without restoring PATH probing. Issue #1528 is contextual Windows ConPTY/input validation from the source work."
+      ],
+      "touched_paths": [
+        "scripts/test_vendor_portable_pty.py",
+        "scripts/windows_smoke_conpty_path.ps1",
+        "vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch",
+        "vendor/patches/portable-pty/0001-force-system-conpty.patch",
+        "vendor/portable-pty.patches.md",
+        "vendor/portable-pty/src/win/psuedocon.rs"
+      ],
+      "verification": [
+        "python3 -m unittest scripts.test_vendor_portable_pty",
+        "GitHub Actions Windows app-local ConPTY smoke test must observe the bundled x64/OpenConsole.exe process.",
+        "GitHub Actions Windows system fallback smoke test must pass with no app-local bundle."
+      ],
+      "remove_when": "Upstream portable-pty supports an absolute executable-local ConPTY DLL with complete architecture-specific OpenConsole validation, no PATH probing, and system fallback when no bundle is present."
+    }
+  ]
+}

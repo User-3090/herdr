@@ -1,0 +1,114 @@
+From 5ef4f38bd31741f681ddd673ea3a0b529c4cc4db Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Wed, 22 Jul 2026 07:48:45 +0200
+Subject: [PATCH 7/8] fix(windows): bind MediaPlayer path through environment
+
+Arguments following powershell.exe -Command are not reliably bound to the
+inline script's param([string]$Path) block. Pass the literal media path through
+a process-scoped HERDR_SOUND_PATH variable instead, then resolve it inside the
+script before opening MediaPlayer.
+
+Factor command construction just enough to test Unicode and spaced paths, and
+verify the path is absent from PowerShell's argument list. Do not add a Beep
+fallback or alter system-notification delivery.
+
+Extracted from d7cf08675e0a3675c377231195fab37cac22c2bf and
+f02704b5d05b31cd9507190d9d615fa6227badd9.
+
+refs #1657
+refs #1062
+refs #1330
+---
+ src/sound.rs | 40 +++++++++++++++++++++++++++++-----------
+ 1 file changed, 29 insertions(+), 11 deletions(-)
+
+diff --git a/src/sound.rs b/src/sound.rs
+index d55fd0841dc9a47833762262752c1e493772cda2..73fbae8362a92865b773d007e6a51ec5cb84f46f 100644
+--- a/src/sound.rs
++++ b/src/sound.rs
+@@ -8,9 +8,7 @@ use std::io::Write;
+ #[cfg(not(any(windows, target_os = "macos")))]
+ use std::io::{Read, Result as IoResult};
+ use std::path::{Path, PathBuf};
+-#[cfg(not(windows))]
+-use std::process::Command;
+-use std::process::Output;
++use std::process::{Command, Output};
+ use std::sync::atomic::{AtomicU64, Ordering};
+ #[cfg(not(any(windows, target_os = "macos")))]
+ use std::time::{Duration, Instant};
+@@ -18,6 +16,8 @@ use std::time::{Duration, Instant};
+ use tracing::warn;
+ 
+ const DISABLE_SOUND_ENV: &str = "HERDR_DISABLE_SOUND";
++#[cfg(any(windows, test))]
++const WINDOWS_SOUND_PATH_ENV: &str = "HERDR_SOUND_PATH";
+ #[cfg(not(any(windows, target_os = "macos")))]
+ const AUDIO_PLAYER_TIMEOUT: Duration = Duration::from_secs(15);
+ #[cfg(not(any(windows, target_os = "macos")))]
+@@ -121,7 +121,8 @@ fn run_player(path: &Path) -> Result<Output, String> {
+ #[cfg(any(windows, test))]
+ fn windows_media_player_script() -> &'static str {
+     r#"
+-param([string]$Path)
++$Path = [Environment]::GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')
++if ([string]::IsNullOrWhiteSpace($Path)) { throw 'HERDR_SOUND_PATH is not set' }
+ $ErrorActionPreference = 'Stop'
+ Add-Type -AssemblyName PresentationCore
+ $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
+@@ -150,9 +151,10 @@ if (-not $script:done) { throw 'sound playback timed out' }
+ "#
+ }
+ 
+-#[cfg(windows)]
+-fn run_windows_player(path: &Path) -> Result<Output, String> {
+-    crate::noninteractive_process::command("powershell.exe")
++#[cfg(any(windows, test))]
++fn windows_player_command(path: &Path) -> Command {
++    let mut command = crate::noninteractive_process::command("powershell.exe");
++    command
+         .args([
+             "-NoLogo",
+             "-NoProfile",
+@@ -162,7 +164,13 @@ fn run_windows_player(path: &Path) -> Result<Output, String> {
+             "-Command",
+             windows_media_player_script(),
+         ])
+-        .arg(path)
++        .env(WINDOWS_SOUND_PATH_ENV, path);
++    command
++}
++
++#[cfg(windows)]
++fn run_windows_player(path: &Path) -> Result<Output, String> {
++    windows_player_command(path)
+         .output()
+         .map_err(|e| format!("Windows MediaPlayer playback failed: {e}"))
+ }
+@@ -403,11 +411,21 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn windows_media_player_script_accepts_literal_path_argument() {
++    fn windows_media_player_uses_process_environment_for_literal_path() {
+         let script = windows_media_player_script();
+-
+-        assert!(script.contains("param([string]$Path)"));
++        let path = Path::new(r"C:\sound dir\döne.mp3");
++        let command = windows_player_command(path);
++        let env_path = command.get_envs().find_map(|(key, value)| {
++            (key == std::ffi::OsStr::new(WINDOWS_SOUND_PATH_ENV))
++                .then_some(value)
++                .flatten()
++        });
++
++        assert!(script.contains("GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')"));
++        assert!(!script.contains("param([string]$Path)"));
+         assert!(script.contains("Resolve-Path -LiteralPath $Path"));
+         assert!(script.contains("System.Windows.Media.MediaPlayer"));
++        assert_eq!(env_path, Some(path.as_os_str()));
++        assert!(!command.get_args().any(|arg| arg == path.as_os_str()));
+     }
+ }
+-- 
+2.55.0.windows.3

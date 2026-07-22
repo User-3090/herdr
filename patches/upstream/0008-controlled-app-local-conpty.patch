@@ -1,0 +1,361 @@
+From f359481fd9460c3d73395ce1678582317554afc7 Mon Sep 17 00:00:00 2001
+From: User-3090 <71881005+User-3090@users.noreply.github.com>
+Date: Tue, 21 Jul 2026 14:02:11 +0200
+Subject: [PATCH 8/8] fix(windows): allow controlled app-local ConPTY
+
+Replace the force-system portable-pty patch with an explicit app-local loader.
+It derives an absolute conpty.dll path from current_exe, never probes PATH,
+requires every OpenConsole host architecture needed by the executable, rejects
+partial bundles, and retains kernel32.dll as the fallback when no bundle exists.
+
+Update the vendored-patch record, make its Windows path check portable, and
+extend the existing smoke helper so a caller can assert the expected app-local
+OpenConsole process. Keep package discovery, floating-version selection, and
+fork-only build, nightly, and release workflows out of this patch.
+
+Extracted from the ConPTY portions of 006886c96c9f98f4056894d5da402b22188e79fc,
+f3fac551ece1b3f05276bb60f33ed16fbd487f70, and
+619414627c158a794c2a5714e74e4fd699211a60.
+
+refs #761
+refs #1528
+---
+ scripts/test_vendor_portable_pty.py           | 11 ++-
+ scripts/windows_smoke_conpty_path.ps1         | 30 ++++++-
+ .../0001-controlled-app-local-conpty.patch    | 80 +++++++++++++++++++
+ .../0001-force-system-conpty.patch            | 37 ---------
+ vendor/portable-pty.patches.md                | 23 +++---
+ vendor/portable-pty/src/win/psuedocon.rs      | 45 ++++++++++-
+ 6 files changed, 174 insertions(+), 52 deletions(-)
+ create mode 100644 vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch
+ delete mode 100644 vendor/patches/portable-pty/0001-force-system-conpty.patch
+
+diff --git a/scripts/test_vendor_portable_pty.py b/scripts/test_vendor_portable_pty.py
+index 87537d41733800731b1e492f0209d1b1d6c71ad1..97797a7375b81941431cbd565b1963e83aeb50ce 100644
+--- a/scripts/test_vendor_portable_pty.py
++++ b/scripts/test_vendor_portable_pty.py
+@@ -65,9 +65,9 @@ class VendorPortablePtyTests(unittest.TestCase):
+         self.assertTrue(index.exists())
+         text = index.read_text()
+         missing = [
+-            str(path.relative_to(project_root))
++            path.relative_to(project_root).as_posix()
+             for path in patches
+-            if str(path.relative_to(project_root)) not in text
++            if path.relative_to(project_root).as_posix() not in text
+         ]
+         self.assertEqual(missing, [])
+ 
+@@ -103,12 +103,17 @@ class VendorPortablePtyTests(unittest.TestCase):
+                 f"stderr:\n{result.stderr}",
+             )
+ 
+-    def test_windows_conpty_loader_does_not_probe_path_conpty_dll(self) -> None:
++    def test_windows_conpty_loader_uses_only_controlled_app_local_dll(self) -> None:
+         project_root = Path(__file__).resolve().parent.parent
+         source = project_root / "vendor" / "portable-pty" / "src" / "win" / "psuedocon.rs"
+         text = source.read_text()
+ 
+         self.assertIn('ConPtyFuncs::open(Path::new("kernel32.dll"))', text)
++        self.assertIn("std::env::current_exe()", text)
++        self.assertIn('exe_dir.join("conpty.dll")', text)
++        self.assertIn("APP_LOCAL_CONSOLE_HOST_ARCHES", text)
++        self.assertIn('.join("OpenConsole.exe")', text)
++        self.assertIn("ConPtyFuncs::open(&dll)", text)
+         self.assertNotIn('Path::new("conpty.dll")', text)
+ 
+ 
+diff --git a/scripts/windows_smoke_conpty_path.ps1 b/scripts/windows_smoke_conpty_path.ps1
+index ce54dd45ba97ee4ae5482ac552ebb82bf5be7a72..10210311eb55ce0e50319ce3f929e0b326921e1c 100644
+--- a/scripts/windows_smoke_conpty_path.ps1
++++ b/scripts/windows_smoke_conpty_path.ps1
+@@ -2,7 +2,9 @@ param(
+     [Parameter(Mandatory = $true)]
+     [string] $ExePath,
+ 
+-    [string] $Session = "ci-windows-$([guid]::NewGuid().ToString('N'))"
++    [string] $Session = "ci-windows-$([guid]::NewGuid().ToString('N'))",
++
++    [string] $ExpectedHostPath
+ )
+ 
+ $ErrorActionPreference = "Stop"
+@@ -92,6 +94,32 @@ try {
+     if ([string]::IsNullOrWhiteSpace($paneId)) {
+         throw "workspace create did not return a root pane id: $($created -join "`n")"
+     }
++
++    if (-not [string]::IsNullOrWhiteSpace($ExpectedHostPath)) {
++        $expectedHost = (Resolve-Path $ExpectedHostPath).Path
++        $matchingHost = $null
++        $deadline = (Get-Date).AddSeconds(10)
++        do {
++            $matchingHost = Get-Process -Name OpenConsole -ErrorAction SilentlyContinue |
++                Where-Object {
++                    try {
++                        $_.Path -eq $expectedHost
++                    } catch {
++                        $false
++                    }
++                } |
++                Select-Object -First 1
++            if ($null -ne $matchingHost) {
++                break
++            }
++            Start-Sleep -Milliseconds 250
++        } while ((Get-Date) -lt $deadline)
++
++        if ($null -eq $matchingHost) {
++            throw "pane did not start the expected app-local console host: $expectedHost"
++        }
++    }
++
+     $marker = "HERDR_CONPTY_SMOKE_OK"
+     Invoke-Checked $exe @("pane", "run", $paneId, "echo $marker")
+ 
+diff --git a/vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch b/vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..f70bddf380193030f6f5fae8e2c707a2c5a92937
+--- /dev/null
++++ b/vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch
+@@ -0,0 +1,80 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: herdr maintainers <maintainers@herdr.dev>
++Date: Mon, 20 Jul 2026 00:00:00 +0000
++Subject: [PATCH] use controlled app-local ConPTY
++
++Never resolve a bare conpty.dll through the DLL search path. Use an approved
++app-local conpty.dll only when all OpenConsole architectures required by the
++application are deployed beside herdr.exe; otherwise retain the system
++implementation.
++
++Herdr issue: https://github.com/ogulcancelik/herdr/issues/761
++Vendored base: portable-pty 0.9.0
++---
++ vendor/portable-pty/src/win/psuedocon.rs | 54 ++++++++++++++++++++++----
++ 1 file changed, 45 insertions(+), 9 deletions(-)
++
++diff --git a/vendor/portable-pty/src/win/psuedocon.rs b/vendor/portable-pty/src/win/psuedocon.rs
++index 0000000..0000000 100644
++--- a/vendor/portable-pty/src/win/psuedocon.rs
+++++ b/vendor/portable-pty/src/win/psuedocon.rs
++@@ -43,4 +43,18 @@ shared_library!(ConPtyFuncs,
++ );
++-
++-fn load_conpty() -> ConPtyFuncs {
+++
+++#[cfg(target_arch = "x86")]
+++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x86", "x64", "arm64"];
+++#[cfg(target_arch = "x86_64")]
+++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x64", "arm64"];
+++#[cfg(target_arch = "aarch64")]
+++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["arm64"];
+++
+++fn app_local_console_host_exists(exe_dir: &Path, architecture: &str) -> bool {
+++    exe_dir
+++        .join(architecture)
+++        .join("OpenConsole.exe")
+++        .is_file()
+++}
+++
+++fn load_conpty() -> ConPtyFuncs {
++     // If the kernel doesn't export these functions then their system is
++@@ -52,9 +66,31 @@ fn load_conpty() -> ConPtyFuncs {
++-    // We prefer to use a sideloaded conpty.dll and openconsole.exe host deployed
++-    // alongside the application.  We check for this after checking for kernel
++-    // support so that we don't try to proceed and do something crazy.
++-    if let Ok(sideloaded) = ConPtyFuncs::open(Path::new("conpty.dll")) {
++-        sideloaded
++-    } else {
++-        kernel
+++    // Only load an app-local ConPTY that Herdr deliberately deployed beside
+++    // its executable. Never probe for a bare conpty.dll through the DLL search
+++    // path; that can select another application's incompatible package.
+++    let Some(exe_dir) = std::env::current_exe()
+++        .ok()
+++        .and_then(|path| path.parent().map(Path::to_path_buf))
+++    else {
+++        return kernel;
+++    };
+++    let dll = exe_dir.join("conpty.dll");
+++    if !dll.is_file() {
+++        let partial_bundle = exe_dir.join("OpenConsole.exe").is_file()
+++            || ["x86", "x64", "arm64"]
+++                .iter()
+++                .any(|architecture| app_local_console_host_exists(&exe_dir, architecture));
+++        assert!(
+++            !partial_bundle,
+++            "bundled OpenConsole.exe exists, but matching conpty.dll is missing"
+++        );
+++        return kernel;
++     }
+++
+++    assert!(
+++        APP_LOCAL_CONSOLE_HOST_ARCHES
+++            .iter()
+++            .all(|architecture| app_local_console_host_exists(&exe_dir, architecture)),
+++        "bundled conpty.dll exists, but one or more required OpenConsole.exe architectures are missing"
+++    );
+++
+++    ConPtyFuncs::open(&dll).expect("failed to load bundled conpty.dll")
++ }
+diff --git a/vendor/patches/portable-pty/0001-force-system-conpty.patch b/vendor/patches/portable-pty/0001-force-system-conpty.patch
+deleted file mode 100644
+index 6074df5721f0f0bff05fce0ecf5995683d3c989a..0000000000000000000000000000000000000000
+--- a/vendor/patches/portable-pty/0001-force-system-conpty.patch
++++ /dev/null
+@@ -1,37 +0,0 @@
+-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+-From: herdr maintainers <maintainers@herdr.dev>
+-Date: Tue, 23 Jun 2026 00:00:00 +0000
+-Subject: [PATCH] force system ConPTY
+-
+-Herdr should use the ConPTY functions exported by kernel32.dll and must not
+-load a bare conpty.dll from PATH. portable-pty's sideload probe is intentional
+-for WezTerm's bundled OpenConsole.exe/conpty.dll pair, but Herdr does not ship
+-that pair.
+-
+-Herdr issue: https://github.com/ogulcancelik/herdr/issues/761
+-Vendored base: portable-pty 0.9.0
+----
+- vendor/portable-pty/src/win/psuedocon.rs | 9 +--------
+- 1 file changed, 1 insertion(+), 8 deletions(-)
+-
+-diff --git a/vendor/portable-pty/src/win/psuedocon.rs b/vendor/portable-pty/src/win/psuedocon.rs
+-index 0000000..0000000 100644
+---- a/vendor/portable-pty/src/win/psuedocon.rs
+-+++ b/vendor/portable-pty/src/win/psuedocon.rs
+-@@ -49,14 +49,7 @@ fn load_conpty() -> ConPtyFuncs {
+-         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
+-     );
+--
+--    // We prefer to use a sideloaded conpty.dll and openconsole.exe host deployed
+--    // alongside the application.  We check for this after checking for kernel
+--    // support so that we don't try to proceed and do something crazy.
+--    if let Ok(sideloaded) = ConPtyFuncs::open(Path::new("conpty.dll")) {
+--        sideloaded
+--    } else {
+--        kernel
+--    }
+-+
+-+    kernel
+- }
+-
+- lazy_static! {
+diff --git a/vendor/portable-pty.patches.md b/vendor/portable-pty.patches.md
+index 7e6d27431043f4d2306051e52e452eca9a549681..7deb7d44c486df7ae35e86101ffbfbf39f8ff95b 100644
+--- a/vendor/portable-pty.patches.md
++++ b/vendor/portable-pty.patches.md
+@@ -4,11 +4,11 @@ This file tracks intentional local changes applied on top of the vendored
+ `portable-pty` source. Remove a patch only when the upstream crate contains an
+ equivalent fix or exposes an option that lets Herdr keep the same behavior.
+ 
+-## 0001 force system ConPTY
++## 0001 controlled app-local ConPTY
+ 
+ status: active
+ 
+-patch: `vendor/patches/portable-pty/0001-force-system-conpty.patch`
++patch: `vendor/patches/portable-pty/0001-controlled-app-local-conpty.patch`
+ 
+ herdr issue: https://github.com/ogulcancelik/herdr/issues/761
+ 
+@@ -23,13 +23,15 @@ local files:
+ - `vendor/portable-pty/src/win/psuedocon.rs`
+ 
+ reason: `portable-pty` intentionally probes a bare `conpty.dll` after verifying
+-that `kernel32.dll` exports the ConPTY API. That is useful for WezTerm's bundled
+-`OpenConsole.exe` and `conpty.dll` pair, but Herdr does not ship that pair and
+-must not load another application's `conpty.dll` from `PATH`.
++that `kernel32.dll` exports the ConPTY API. Herdr must not load another
++application's DLL from the search path. It may use Microsoft's pinned app-local
++package when `conpty.dll` and all OpenConsole architectures required by the
++application are deliberately deployed beside `herdr.exe`; otherwise it retains
++the system implementation. Architecture-specific hosts live under `x86/`,
++`x64/`, and `arm64/` as required by Microsoft's package layout.
+ 
+-remove when: upstream `portable-pty` no longer loads bare `conpty.dll` from the
+-DLL search path, upstream exposes a way for consumers to force system ConPTY, or
+-Herdr replaces the Windows PTY backend.
++remove when: upstream `portable-pty` accepts an explicit absolute app-local
++ConPTY path with a system fallback, or Herdr replaces the Windows PTY backend.
+ 
+ verification:
+ 
+@@ -37,8 +39,9 @@ verification:
+ python3 -m unittest scripts.test_vendor_portable_pty
+ ```
+ 
+-On Windows, also verify that pane creation succeeds when `PATH` contains a
+-directory with `conpty.dll`.
++On Windows, verify that a PATH-only `conpty.dll` is ignored, an app-local
++Microsoft package starts the native-architecture `OpenConsole.exe`, and removing
++the package restores system ConPTY.
+ 
+ ## 0002 expose Windows raw command tails
+ 
+diff --git a/vendor/portable-pty/src/win/psuedocon.rs b/vendor/portable-pty/src/win/psuedocon.rs
+index 133eab52dbefde90fccc1e80f2fcc01fdbdb3193..05bade0984234068e8ef7c87904c03dc2294857f 100644
+--- a/vendor/portable-pty/src/win/psuedocon.rs
++++ b/vendor/portable-pty/src/win/psuedocon.rs
+@@ -42,6 +42,20 @@ shared_library!(ConPtyFuncs,
+     pub fn ClosePseudoConsole(hpc: HPCON),
+ );
+ 
++#[cfg(target_arch = "x86")]
++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x86", "x64", "arm64"];
++#[cfg(target_arch = "x86_64")]
++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["x64", "arm64"];
++#[cfg(target_arch = "aarch64")]
++const APP_LOCAL_CONSOLE_HOST_ARCHES: &[&str] = &["arm64"];
++
++fn app_local_console_host_exists(exe_dir: &Path, architecture: &str) -> bool {
++    exe_dir
++        .join(architecture)
++        .join("OpenConsole.exe")
++        .is_file()
++}
++
+ fn load_conpty() -> ConPtyFuncs {
+     // If the kernel doesn't export these functions then their system is
+     // too old and we cannot run.
+@@ -49,7 +63,36 @@ fn load_conpty() -> ConPtyFuncs {
+         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
+     );
+ 
+-    kernel
++    // Only load an app-local ConPTY that Herdr deliberately deployed beside
++    // its executable. Never probe for a bare conpty.dll through the DLL search
++    // path; that can select another application's incompatible package.
++    let Some(exe_dir) = std::env::current_exe()
++        .ok()
++        .and_then(|path| path.parent().map(Path::to_path_buf))
++    else {
++        return kernel;
++    };
++    let dll = exe_dir.join("conpty.dll");
++    if !dll.is_file() {
++        let partial_bundle = exe_dir.join("OpenConsole.exe").is_file()
++            || ["x86", "x64", "arm64"]
++                .iter()
++                .any(|architecture| app_local_console_host_exists(&exe_dir, architecture));
++        assert!(
++            !partial_bundle,
++            "bundled OpenConsole.exe exists, but matching conpty.dll is missing"
++        );
++        return kernel;
++    }
++
++    assert!(
++        APP_LOCAL_CONSOLE_HOST_ARCHES
++            .iter()
++            .all(|architecture| app_local_console_host_exists(&exe_dir, architecture)),
++        "bundled conpty.dll exists, but one or more required OpenConsole.exe architectures are missing"
++    );
++
++    ConPtyFuncs::open(&dll).expect("failed to load bundled conpty.dll")
+ }
+ 
+ lazy_static! {
+-- 
+2.55.0.windows.3
