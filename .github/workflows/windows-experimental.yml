@@ -2,7 +2,7 @@ name: Windows experimental build
 
 on:
   push:
-    branches: [windows-conpty-theme, windows]
+    branches: [windows-conpty-theme, windows, windows-remote]
 
 concurrency:
   group: windows-experimental-${{ github.ref }}

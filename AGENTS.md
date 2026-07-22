@@ -88,6 +88,12 @@ After the change is integrated, remove the task worktree and delete the task bra
 
 ## Testing
 
+### Fast Windows fork iteration
+
+- Develop fork-only Windows work on `windows-remote`; that branch runs the focused Windows workflow and uploads its executable artifact without starting the full Ubuntu/macOS/Windows matrix.
+- Merge a natively verified candidate to `master` once, then require the full cross-platform CI and final release. Intermediate Windows commits do not need prereleases.
+- Keep a scheduled full-matrix run on the default branch so drift is detected outside the rapid iteration loop.
+
 Use `just` recipes by default instead of invoking cargo or scripts directly.
 
 ```bash
