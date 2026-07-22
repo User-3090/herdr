@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn windows_media_player_uses_process_environment_for_literal_path() {
         let script = windows_media_player_script();
-        let path = Path::new(r"C:\sound dir\done.mp3");
+        let path = Path::new(r"C:\sound dir\döne.mp3");
         let command = windows_player_command(path);
         let env_path = command.get_envs().find_map(|(key, value)| {
             (key == std::ffi::OsStr::new(WINDOWS_SOUND_PATH_ENV))
