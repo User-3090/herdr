@@ -595,7 +595,7 @@ jobs:
             local normalized_body
 
             body="$(jq -r .body <<<"$release_json")"
-            normalized_body="$(sed -E "s#^Workflow run: https://github\\.com/${GITHUB_REPOSITORY}/actions/runs/[0-9]+$#${workflow_placeholder}#" <<<"$body")"
+            normalized_body="$(sed -E "s#^Workflow run: https://github\\.com/${GITHUB_REPOSITORY}/actions/runs/[0-9]+\$#${workflow_placeholder}#" <<<"$body")"
             if [[ "$normalized_body" != "$expected_owned_notes" ]]; then
               echo "Release ${tag} does not match the complete workflow-owned note template." >&2
               exit 1
