@@ -50,7 +50,7 @@ $justVersion = Assert-ProvisioningCommand -Role 'Just' -Name 'just.exe' -Version
 if (-not (Test-Path -LiteralPath (Join-Path $ProjectDirectory 'Cargo.toml') -PathType Leaf)) {
     throw "Herdr Cargo.toml is missing from mapped project: $ProjectDirectory"
 }
-$env:CARGO_TARGET_DIR = 'C:\HerdrBoxCache\herdr-target'
+$env:CARGO_TARGET_DIR = 'C:\HerdrTarget'
 New-Item -ItemType Directory -Path $env:CARGO_TARGET_DIR -Force | Out-Null
 Push-Location $ProjectDirectory
 try {
