@@ -8,18 +8,16 @@ use std::io::Write;
 #[cfg(not(any(windows, target_os = "macos")))]
 use std::io::{Read, Result as IoResult};
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
-use std::process::Command;
-use std::process::Output;
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(any(windows, target_os = "macos")))]
 use std::time::{Duration, Instant};
 
 use tracing::warn;
-#[cfg(windows)]
-use windows_sys::Win32::System::Diagnostics::Debug::Beep;
 
 const DISABLE_SOUND_ENV: &str = "HERDR_DISABLE_SOUND";
+#[cfg(any(windows, test))]
+const WINDOWS_SOUND_PATH_ENV: &str = "HERDR_SOUND_PATH";
 #[cfg(not(any(windows, target_os = "macos")))]
 const AUDIO_PLAYER_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -62,11 +60,6 @@ pub fn play(sound: Sound, config: &crate::config::SoundConfig) {
         };
 
         if let Err(err) = play_bytes(data) {
-            #[cfg(windows)]
-            if play_windows_fallback_tone(sound) {
-                warn!(sound = ?sound, err = %err, "MP3 playback failed; used Windows fallback tone");
-                return;
-            }
             warn!(sound = ?sound, err = %err, "sound playback failed");
         }
     });
@@ -128,7 +121,8 @@ fn run_player(path: &Path) -> Result<Output, String> {
 #[cfg(any(windows, test))]
 fn windows_media_player_script() -> &'static str {
     r#"
-param([string]$Path)
+$Path = [Environment]::GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')
+if ([string]::IsNullOrWhiteSpace($Path)) { throw 'HERDR_SOUND_PATH is not set' }
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationCore
 $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
@@ -157,36 +151,28 @@ if (-not $script:done) { throw 'sound playback timed out' }
 "#
 }
 
-#[cfg(windows)]
-fn run_windows_player(path: &Path) -> Result<Output, String> {
-    crate::noninteractive_process::command("powershell.exe")
+#[cfg(any(windows, test))]
+fn windows_player_command(path: &Path) -> Command {
+    let mut command = crate::noninteractive_process::command("powershell.exe");
+    command
         .args([
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
-            "-Sta",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
             windows_media_player_script(),
         ])
-        .arg(path)
-        .output()
-        .map_err(|e| format!("Windows MediaPlayer playback failed: {e}"))
-}
-
-#[cfg(any(windows, test))]
-fn windows_fallback_tone(sound: Sound) -> (u32, u32) {
-    match sound {
-        Sound::Done => (784, 180),
-        Sound::Request => (988, 260),
-    }
+        .env(WINDOWS_SOUND_PATH_ENV, path);
+    command
 }
 
 #[cfg(windows)]
-fn play_windows_fallback_tone(sound: Sound) -> bool {
-    let (frequency, duration_ms) = windows_fallback_tone(sound);
-    unsafe { Beep(frequency, duration_ms) != 0 }
+fn run_windows_player(path: &Path) -> Result<Output, String> {
+    windows_player_command(path)
+        .output()
+        .map_err(|e| format!("Windows MediaPlayer playback failed: {e}"))
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -425,19 +411,22 @@ mod tests {
     }
 
     #[test]
-    fn windows_media_player_script_accepts_literal_path_argument() {
+    fn windows_media_player_uses_process_environment_for_literal_path() {
         let script = windows_media_player_script();
+        let path = Path::new(r"C:\sound dir\döne.mp3");
+        let command = windows_player_command(path);
+        let env_path = command.get_envs().find_map(|(key, value)| {
+            (key == std::ffi::OsStr::new(WINDOWS_SOUND_PATH_ENV))
+                .then_some(value)
+                .flatten()
+        });
 
-        assert!(script.contains("param([string]$Path)"));
+        assert!(script.contains("GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')"));
+        assert!(!script.contains("param([string]$Path)"));
         assert!(script.contains("Resolve-Path -LiteralPath $Path"));
         assert!(script.contains("System.Windows.Media.MediaPlayer"));
+        assert_eq!(env_path, Some(path.as_os_str()));
+        assert!(!command.get_args().any(|arg| arg == path.as_os_str()));
     }
 
-    #[test]
-    fn windows_notification_fallback_tones_are_distinct() {
-        assert_ne!(
-            windows_fallback_tone(Sound::Done),
-            windows_fallback_tone(Sound::Request)
-        );
-    }
 }
