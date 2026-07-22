@@ -629,11 +629,13 @@ mod tests {
 
         assert_eq!(
             contents,
-            "Include \"C:/Users/A Person/.ssh/config\"\n\
-Include \"C:/ProgramData/ssh/ssh_config\"\n\
-Host *\n\
-  ServerAliveInterval 15\n\
-  ServerAliveCountMax 4\n"
+            concat!(
+                "Include \"C:/Users/A Person/.ssh/config\"\n",
+                "Include \"C:/ProgramData/ssh/ssh_config\"\n",
+                "Host *\n",
+                "  ServerAliveInterval 15\n",
+                "  ServerAliveCountMax 4\n",
+            )
         );
     }
 
