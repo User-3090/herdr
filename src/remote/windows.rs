@@ -161,14 +161,9 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     let program = std::env::args()
         .next()
         .unwrap_or_else(|| "herdr.exe".to_string());
-    let reattach_command = reattach_command(
-        &program,
-        &remote.target,
-        &session_name,
-        remote.keybindings,
-    );
-    let _bridge =
-        SshStdioBridge::start(remote.target, local_socket.clone(), session_name)?;
+    let reattach_command =
+        reattach_command(&program, &remote.target, &session_name, remote.keybindings);
+    let _bridge = SshStdioBridge::start(remote.target, local_socket.clone(), session_name)?;
 
     run_client_process(&local_socket, &reattach_command, remote.keybindings)
 }
@@ -266,10 +261,7 @@ impl SshStdioBridge {
 impl Drop for SshStdioBridge {
     fn drop(&mut self) {
         self.should_stop.store(true, Ordering::Release);
-        let _ = crate::ipc::remove_socket_file_if_owned(
-            &self.local_socket,
-            &self.socket_identity,
-        );
+        let _ = crate::ipc::remove_socket_file_if_owned(&self.local_socket, &self.socket_identity);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -346,7 +338,11 @@ fn reattach_command(
     session_name: &str,
     keybindings: RemoteKeybindings,
 ) -> String {
-    let program = if program.is_empty() { "herdr.exe" } else { program };
+    let program = if program.is_empty() {
+        "herdr.exe"
+    } else {
+        program
+    };
     let mut command = format!(
         "& {} --remote {}",
         powershell_quote(program),
@@ -497,10 +493,8 @@ mod tests {
 
     #[test]
     fn windows_remote_socket_name_is_bounded_and_namespaced() {
-        let path = local_forward_socket_path(
-            "ssh://sandbox host:2222/with/more/path",
-            "agent's work",
-        );
+        let path =
+            local_forward_socket_path("ssh://sandbox host:2222/with/more/path", "agent's work");
         let name = path.file_name().unwrap().to_string_lossy();
 
         assert!(name.starts_with("herdr-remote-"));
