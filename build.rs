@@ -41,6 +41,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_OPTIMIZE");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SIMD");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
+    println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_OUT_DIR");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_COMMIT");
@@ -58,6 +59,18 @@ fn main() {
         .to_string();
 
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
+    let configured_zig_out_dir =
+        env::var_os("LIBGHOSTTY_VT_ZIG_OUT_DIR").map(PathBuf::from);
+    if let Some(path) = &configured_zig_out_dir {
+        assert!(
+            path.is_absolute(),
+            "LIBGHOSTTY_VT_ZIG_OUT_DIR must be absolute: {}",
+            path.display()
+        );
+    }
+    let zig_out_dir = configured_zig_out_dir
+        .clone()
+        .unwrap_or_else(|| vendored_dir.join("zig-out"));
     let mut command = Command::new(zig);
     command
         .arg("build")
@@ -67,6 +80,9 @@ fn main() {
         .arg(format!("-Dtarget={zig_target}"))
         .arg(format!("-Dversion-string={version_string}"))
         .arg("-Demit-xcframework=false");
+    if configured_zig_out_dir.is_some() {
+        command.arg("--prefix").arg(&zig_out_dir);
+    }
     if let Ok(system_dir) = env::var("LIBGHOSTTY_VT_ZIG_SYSTEM_DIR") {
         command.arg("--system").arg(system_dir);
     }
@@ -80,7 +96,7 @@ fn main() {
         "zig build for vendored libghostty-vt failed: {status}"
     );
 
-    let lib_dir = vendored_dir.join("zig-out/lib");
+    let lib_dir = zig_out_dir.join("lib");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     if target.contains("apple-darwin") {
         let static_lib = lib_dir.join("libghostty-vt.a");

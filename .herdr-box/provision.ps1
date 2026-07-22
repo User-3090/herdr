@@ -51,7 +51,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectDirectory 'Cargo.toml') -Pat
     throw "Herdr Cargo.toml is missing from mapped project: $ProjectDirectory"
 }
 $env:CARGO_TARGET_DIR = 'C:\HerdrTarget'
-New-Item -ItemType Directory -Path $env:CARGO_TARGET_DIR -Force | Out-Null
+$env:ZIG_LOCAL_CACHE_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-local-cache'
+$env:ZIG_GLOBAL_CACHE_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-global-cache'
+$env:LIBGHOSTTY_VT_ZIG_OUT_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-out'
+foreach ($directory in @($env:CARGO_TARGET_DIR, $env:ZIG_LOCAL_CACHE_DIR, $env:ZIG_GLOBAL_CACHE_DIR, $env:LIBGHOSTTY_VT_ZIG_OUT_DIR)) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+}
 Push-Location $ProjectDirectory
 try {
     Invoke-ProvisioningNative -Role 'Herdr portable PTY vendor test' -FilePath 'python.exe' `
