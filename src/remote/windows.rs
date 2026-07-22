@@ -1,6 +1,7 @@
 //! Windows-to-Windows remote thin-client launcher over OpenSSH command stdio.
 
 use std::ffi::OsStr;
+use std::fs;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,6 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 const BRIDGE_ACCEPT_POLL: Duration = Duration::from_millis(50);
 const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
 const REMOTE_HERDR_PATH: &str = r"C:\Herdr\herdr.exe";
-const SSH_CONFIG_ENV_VAR: &str = "HERDR_SSH_CONFIG";
 
 pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
 pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
@@ -167,7 +167,25 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         .unwrap_or_else(|| "herdr.exe".to_string());
     let reattach_command =
         reattach_command(&program, &remote.target, &session_name, remote.keybindings);
-    let _bridge = SshStdioBridge::start(remote.target, local_socket.clone(), session_name)?;
+    let manage_ssh_config = crate::config::Config::load()
+        .config
+        .remote
+        .manage_ssh_config;
+    let managed_ssh_config = if manage_ssh_config {
+        write_managed_ssh_config()
+            .inspect_err(|err| {
+                tracing::debug!(%err, "could not write managed ssh config; using plain ssh");
+            })
+            .ok()
+    } else {
+        None
+    };
+    let _bridge = SshStdioBridge::start(
+        remote.target,
+        local_socket.clone(),
+        session_name,
+        managed_ssh_config,
+    )?;
 
     run_client_process(&local_socket, &reattach_command, remote.keybindings)
 }
@@ -221,10 +239,16 @@ struct SshStdioBridge {
     socket_identity: crate::ipc::SocketFileIdentity,
     should_stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    _managed_ssh_config: Option<ManagedSshConfig>,
 }
 
 impl SshStdioBridge {
-    fn start(target: String, local_socket: PathBuf, session_name: String) -> io::Result<Self> {
+    fn start(
+        target: String,
+        local_socket: PathBuf,
+        session_name: String,
+        managed_ssh_config: Option<ManagedSshConfig>,
+    ) -> io::Result<Self> {
         crate::ipc::prepare_socket_path(&local_socket, |path| {
             format!("remote bridge is already listening at {}", path.display())
         })?;
@@ -234,11 +258,19 @@ impl SshStdioBridge {
 
         let should_stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&should_stop);
+        let ssh_config_path = managed_ssh_config
+            .as_ref()
+            .map(|config| config.config_path.clone());
         let thread = thread::spawn(move || {
             while !thread_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok(stream) => {
-                        if let Err(err) = bridge_connection(stream, &target, &session_name) {
+                        if let Err(err) = bridge_connection(
+                            stream,
+                            &target,
+                            &session_name,
+                            ssh_config_path.as_deref(),
+                        ) {
                             eprintln!("herdr: remote bridge failed: {err}");
                         }
                     }
@@ -258,6 +290,7 @@ impl SshStdioBridge {
             socket_identity,
             should_stop,
             thread: Some(thread),
+            _managed_ssh_config: managed_ssh_config,
         })
     }
 }
@@ -276,8 +309,10 @@ fn bridge_connection(
     stream: crate::ipc::LocalStream,
     target: &str,
     session_name: &str,
+    ssh_config_path: Option<&Path>,
 ) -> io::Result<()> {
-    let mut command = ssh_bridge_command(target, session_name);
+    let mut command =
+        ssh_bridge_command_with_config(target, session_name, ssh_config_path.map(Path::as_os_str));
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -326,11 +361,6 @@ fn terminate_process(process: OwnedHandle) {
     }
 }
 
-fn ssh_bridge_command(target: &str, session_name: &str) -> Command {
-    let config = std::env::var_os(SSH_CONFIG_ENV_VAR).filter(|value| !value.is_empty());
-    ssh_bridge_command_with_config(target, session_name, config.as_deref())
-}
-
 fn ssh_bridge_command_with_config(
     target: &str,
     session_name: &str,
@@ -343,6 +373,76 @@ fn ssh_bridge_command_with_config(
     }
     command.arg(target).arg(remote_bridge_command(session_name));
     command
+}
+
+struct ManagedSshConfig {
+    directory: PathBuf,
+    config_path: PathBuf,
+}
+
+impl Drop for ManagedSshConfig {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn write_managed_ssh_config() -> io::Result<ManagedSshConfig> {
+    let directory = private_ssh_config_dir()?;
+    let config_path = directory.join("config");
+    let managed = ManagedSshConfig {
+        directory,
+        config_path,
+    };
+    let user_config = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .map(|home| home.join(".ssh").join("config"))
+        .filter(|path| path.is_file());
+    let system_config = std::env::var_os("PROGRAMDATA")
+        .map(PathBuf::from)
+        .map(|root| root.join("ssh").join("ssh_config"))
+        .filter(|path| path.is_file());
+    let contents = managed_ssh_config_contents(user_config.as_deref(), system_config.as_deref());
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&managed.config_path)?;
+    io::Write::write_all(&mut file, contents.as_bytes())?;
+    Ok(managed)
+}
+
+fn private_ssh_config_dir() -> io::Result<PathBuf> {
+    let base = std::env::temp_dir();
+    for attempt in 0..100 {
+        let directory = base.join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
+        match fs::create_dir(&directory) {
+            Ok(()) => return Ok(directory),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to create private herdr ssh config directory",
+    ))
+}
+
+fn managed_ssh_config_contents(user_config: Option<&Path>, system_config: Option<&Path>) -> String {
+    let mut contents = String::new();
+    if let Some(path) = user_config {
+        contents.push_str(&format!("Include {}\n", ssh_config_quote(path)));
+    }
+    if let Some(path) = system_config {
+        contents.push_str(&format!("Include {}\n", ssh_config_quote(path)));
+    }
+    contents.push_str("Host *\n");
+    contents.push_str("  ServerAliveInterval 15\n");
+    contents.push_str("  ServerAliveCountMax 4\n");
+    contents
+}
+
+fn ssh_config_quote(path: &Path) -> String {
+    format!("\"{}\"", path.to_string_lossy().replace('\\', "/"))
 }
 
 fn remote_bridge_command(session_name: &str) -> String {
@@ -517,6 +617,23 @@ mod tests {
                 "sandbox".to_string(),
                 "& 'C:\\Herdr\\herdr.exe' remote-client-bridge".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn windows_managed_ssh_config_includes_user_config_then_fallback() {
+        let contents = managed_ssh_config_contents(
+            Some(Path::new(r"C:\Users\A Person\.ssh\config")),
+            Some(Path::new(r"C:\ProgramData\ssh\ssh_config")),
+        );
+
+        assert_eq!(
+            contents,
+            "Include \"C:/Users/A Person/.ssh/config\"\n\
+Include \"C:/ProgramData/ssh/ssh_config\"\n\
+Host *\n\
+  ServerAliveInterval 15\n\
+  ServerAliveCountMax 4\n"
         );
     }
 
