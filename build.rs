@@ -59,8 +59,7 @@ fn main() {
         .to_string();
 
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
-    let configured_zig_out_dir =
-        env::var_os("LIBGHOSTTY_VT_ZIG_OUT_DIR").map(PathBuf::from);
+    let configured_zig_out_dir = env::var_os("LIBGHOSTTY_VT_ZIG_OUT_DIR").map(PathBuf::from);
     if let Some(path) = &configured_zig_out_dir {
         assert!(
             path.is_absolute(),
