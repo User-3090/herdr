@@ -1,6 +1,7 @@
 //! Windows-to-Windows remote thin-client launcher over OpenSSH command stdio.
 
 use std::io;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -18,6 +19,7 @@ use interprocess::local_socket::{
 const BRIDGE_ACCEPT_POLL: Duration = Duration::from_millis(50);
 const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
 const REMOTE_HERDR_PATH: &str = r"C:\Herdr\herdr.exe";
+const SSH_CONFIG_ENV_VAR: &str = "HERDR_SSH_CONFIG";
 
 pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
 pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
@@ -314,11 +316,21 @@ fn bridge_connection(
 }
 
 fn ssh_bridge_command(target: &str, session_name: &str) -> Command {
+    let config = std::env::var_os(SSH_CONFIG_ENV_VAR).filter(|value| !value.is_empty());
+    ssh_bridge_command_with_config(target, session_name, config.as_deref())
+}
+
+fn ssh_bridge_command_with_config(
+    target: &str,
+    session_name: &str,
+    config: Option<&OsStr>,
+) -> Command {
     let mut command = Command::new("ssh.exe");
-    command
-        .arg("-T")
-        .arg(target)
-        .arg(remote_bridge_command(session_name));
+    command.arg("-T");
+    if let Some(config) = config {
+        command.arg("-F").arg(config);
+    }
+    command.arg(target).arg(remote_bridge_command(session_name));
     command
 }
 
@@ -474,7 +486,11 @@ mod tests {
 
     #[test]
     fn windows_ssh_bridge_uses_openssh_without_cmd_wrapper() {
-        let command = ssh_bridge_command("sandbox", crate::session::DEFAULT_SESSION_NAME);
+        let command = ssh_bridge_command_with_config(
+            "sandbox",
+            crate::session::DEFAULT_SESSION_NAME,
+            Some(OsStr::new(r"C:\Runs\one\.ssh\config")),
+        );
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -485,6 +501,8 @@ mod tests {
             args,
             vec![
                 "-T".to_string(),
+                "-F".to_string(),
+                r"C:\Runs\one\.ssh\config".to_string(),
                 "sandbox".to_string(),
                 "& 'C:\\Herdr\\herdr.exe' remote-client-bridge".to_string(),
             ]

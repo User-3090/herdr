@@ -100,6 +100,8 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is 
 
 Native Windows remote attach uses `ssh.exe`, a local named-pipe bridge, and the existing thin-client protocol. The target must use PowerShell as its OpenSSH default shell and provide the matching executable at `C:\Herdr\herdr.exe`. Herdr invokes that executable directly, so the installer-junction `.cmd` shim is not required.
 
+Set `HERDR_SSH_CONFIG` to an explicit OpenSSH configuration path when the target alias belongs to an application-owned configuration rather than the user's default SSH config. The Windows adapter passes that path to `ssh.exe -F` without modifying the user's profile.
+
 For other Windows targets, SSH into the server and run `herdr` there:
 
 ```powershell
