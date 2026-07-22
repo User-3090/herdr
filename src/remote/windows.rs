@@ -2,11 +2,11 @@
 
 use std::ffi::OsStr;
 use std::io;
+use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, RecvTimeoutError},
     Arc,
 };
 use std::thread::{self, JoinHandle};
@@ -16,6 +16,7 @@ use interprocess::local_socket::{
     traits::{Listener as _, Stream as _},
     ListenerNonblockingMode,
 };
+use windows_sys::Win32::System::Threading::TerminateProcess;
 
 const BRIDGE_ACCEPT_POLL: Duration = Duration::from_millis(50);
 const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
@@ -293,75 +294,36 @@ fn bridge_connection(
         .stdout
         .take()
         .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "ssh bridge stdout missing"))?;
+    let ssh_process = child.as_handle().try_clone_to_owned()?;
     let (mut stream_to_child, mut child_to_stream) = stream.split();
 
-    let (upload_done_tx, upload_done_rx) = mpsc::sync_channel(1);
     let upload = thread::spawn(move || {
         let result = copy_flush(&mut stream_to_child, &mut child_stdin);
-        let _ = upload_done_tx.send(result);
+        terminate_process(ssh_process);
+        result
     });
     let download = thread::spawn(move || {
         let _ = copy_flush(&mut child_stdout, &mut child_to_stream);
     });
 
-    let completion = wait_for_bridge_child(&mut child, &upload_done_rx)?;
+    let status = child.wait()?;
     let _ = upload.join();
     let _ = download.join();
 
-    match completion {
-        BridgeCompletion::LocalClosed(result) => result.map(|_| ()),
-        BridgeCompletion::RemoteExited(status) if status.success() => Ok(()),
-        BridgeCompletion::RemoteExited(status) => Err(io::Error::new(
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
             io::ErrorKind::ConnectionAborted,
             format!("ssh bridge exited with {status}"),
-        )),
+        ))
     }
 }
 
-#[derive(Debug)]
-enum BridgeCompletion {
-    LocalClosed(io::Result<u64>),
-    RemoteExited(ExitStatus),
-}
-
-fn wait_for_bridge_child(
-    child: &mut Child,
-    upload_done: &Receiver<io::Result<u64>>,
-) -> io::Result<BridgeCompletion> {
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(BridgeCompletion::RemoteExited(status));
-        }
-        match upload_done.recv_timeout(BRIDGE_ACCEPT_POLL) {
-            Ok(result) => {
-                if let Some(status) = child.try_wait()? {
-                    return Ok(BridgeCompletion::RemoteExited(status));
-                }
-                terminate_bridge_child(child)?;
-                return Ok(BridgeCompletion::LocalClosed(result));
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {
-                terminate_bridge_child(child)?;
-                return Ok(BridgeCompletion::LocalClosed(Err(io::Error::other(
-                    "ssh bridge upload worker stopped unexpectedly",
-                ))));
-            }
-        }
+fn terminate_process(process: OwnedHandle) {
+    unsafe {
+        TerminateProcess(process.as_raw_handle(), 1);
     }
-}
-
-fn terminate_bridge_child(child: &mut Child) -> io::Result<ExitStatus> {
-    if let Err(kill_error) = child.kill() {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status);
-        }
-        return Err(io::Error::new(
-            kill_error.kind(),
-            format!("failed to stop ssh bridge after local detach: {kill_error}"),
-        ));
-    }
-    child.wait()
 }
 
 fn ssh_bridge_command(target: &str, session_name: &str) -> Command {
@@ -586,12 +548,17 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let (upload_done_tx, upload_done_rx) = mpsc::sync_channel(1);
-        upload_done_tx.send(Ok(0)).unwrap();
+        let process = child.as_handle().try_clone_to_owned().unwrap();
+        let upload = thread::spawn(move || {
+            let result = copy_flush(&mut io::empty(), &mut io::sink());
+            terminate_process(process);
+            result
+        });
 
-        let completion = wait_for_bridge_child(&mut child, &upload_done_rx).unwrap();
+        let status = child.wait().unwrap();
+        let copied = upload.join().unwrap().unwrap();
 
-        assert!(matches!(completion, BridgeCompletion::LocalClosed(Ok(0))));
-        assert!(child.try_wait().unwrap().is_some());
+        assert_eq!(copied, 0);
+        assert!(!status.success());
     }
 }
