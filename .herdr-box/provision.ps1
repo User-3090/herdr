@@ -214,7 +214,7 @@ if ([string]::IsNullOrWhiteSpace(($buildToolsPath -join ' ').Trim())) {
 
 Write-Output 'Installing Python...'
 Install-ProvisioningWinGetPackage -Role 'Python' -Id 'Python.Python.3.13' -InstallerType 'burn' `
-    -Scope 'machine' -Adapter 'Burn' -RequireAuthenticodeSignature
+    -Scope 'machine' -Adapter 'Burn' -ExecutableName 'python.exe' -RequireAuthenticodeSignature
 $pythonVersion = Assert-ProvisioningCommand -Role 'Python' -Name 'python.exe' -VersionArguments @('--version') -ExpectedPattern '^Python 3\.13\.\d+$'
 
 Write-Output 'Installing Zig...'
