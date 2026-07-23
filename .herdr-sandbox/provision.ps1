@@ -3,7 +3,7 @@ param(
     [string]$ProjectDirectory
 )
 
-# herdr-box-requires: visual-studio-build-tools-vctools
+# herdr-sandbox-requires: visual-studio-build-tools-vctools
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
@@ -375,7 +375,7 @@ function Wait-HerdrVisualStudioInstalled {
             } finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
-            if ($exitCode -eq 0 -and ($installationPath -join ' ').Trim() -ieq 'C:\BuildTools') {
+            if ($exitCode -eq 0 -and ($installationPath -join ' ').Trim() -ieq 'C:\HerdrSandbox\toolchains\visual-studio') {
                 return
             }
         }
@@ -386,8 +386,8 @@ function Wait-HerdrVisualStudioInstalled {
 
 function Install-HerdrVisualStudioBuildTools {
     $visualStudioStopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $cacheRoot = 'C:\HerdrBoxCache\vsbt'
-    $guestLayout = 'C:\HerdrVisualStudioLayout'
+    $cacheRoot = 'C:\HerdrSandbox\cache\vsbt'
+    $guestLayout = 'C:\HerdrSandbox\visual-studio\layout'
     if (-not (Test-Path -LiteralPath $cacheRoot -PathType Container)) {
         throw 'The host-prepared Visual Studio Build Tools cache is missing.'
     }
@@ -423,7 +423,7 @@ function Install-HerdrVisualStudioBuildTools {
         $channelManifest = Join-Path $guestLayout 'ChannelManifest.json'
         $catalog = Join-Path $guestLayout 'Catalog.json'
         $installationArguments = @('--noWeb', '--noUpdateInstaller', '--wait', '--quiet', '--norestart',
-            '--installPath', 'C:\BuildTools', '--channelId', 'VisualStudio.17.Release',
+            '--installPath', 'C:\HerdrSandbox\toolchains\visual-studio', '--channelId', 'VisualStudio.17.Release',
             '--productId', 'Microsoft.VisualStudio.Product.BuildTools', '--channelUri', $channelManifest,
             '--installChannelUri', $channelManifest, '--installCatalogUri', $catalog)
         foreach ($componentID in @(Get-HerdrVisualStudioComponentIDs)) {
@@ -432,10 +432,10 @@ function Install-HerdrVisualStudioBuildTools {
         $installationArguments += @('--addProductLang', 'en-US')
         $installerEngine = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
         foreach ($rule in @(
-            @{ Name = 'HerdrBox-VSBootstrapper-In'; Direction = 'Inbound'; Program = $guestLayoutBootstrapper },
-            @{ Name = 'HerdrBox-VSBootstrapper-Out'; Direction = 'Outbound'; Program = $guestLayoutBootstrapper },
-            @{ Name = 'HerdrBox-VSInstaller-In'; Direction = 'Inbound'; Program = $installerEngine },
-            @{ Name = 'HerdrBox-VSInstaller-Out'; Direction = 'Outbound'; Program = $installerEngine }
+            @{ Name = 'HerdrSandbox-VSBootstrapper-In'; Direction = 'Inbound'; Program = $guestLayoutBootstrapper },
+            @{ Name = 'HerdrSandbox-VSBootstrapper-Out'; Direction = 'Outbound'; Program = $guestLayoutBootstrapper },
+            @{ Name = 'HerdrSandbox-VSInstaller-In'; Direction = 'Inbound'; Program = $installerEngine },
+            @{ Name = 'HerdrSandbox-VSInstaller-Out'; Direction = 'Outbound'; Program = $installerEngine }
         )) {
             New-NetFirewallRule -Name $rule.Name -DisplayName $rule.Name -Enabled True `
                 -Direction $rule.Direction -Program $rule.Program -Action Block | Out-Null
@@ -673,9 +673,9 @@ $zigVersion = Assert-ProvisioningCommand -Role 'Zig' -Name 'zig.exe' -VersionArg
 Write-Output 'Installing Rustup and the repository toolchain...'
 $rustTriple = 'x86_64-pc-windows-msvc'
 $rustToolchain = "1.96.1-$rustTriple"
-$env:RUSTUP_HOME = 'C:\HerdrBoxTools\rustup'
-$env:CARGO_HOME = 'C:\HerdrBoxTools\cargo'
-$env:CARGO_TARGET_DIR = 'C:\HerdrTarget'
+$env:RUSTUP_HOME = 'C:\HerdrSandbox\toolchains\rustup'
+$env:CARGO_HOME = 'C:\HerdrSandbox\toolchains\cargo'
+$env:CARGO_TARGET_DIR = 'C:\HerdrSandbox\build\cargo-target'
 $env:ZIG_LOCAL_CACHE_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-local-cache'
 $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-global-cache'
 $env:LIBGHOSTTY_VT_ZIG_OUT_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-out'
@@ -710,10 +710,10 @@ $rustPayloads = @(
     [pscustomobject]@{ RelativePath = 'dist\2026-06-30\rustc-1.96.1-x86_64-pc-windows-msvc.tar.xz'; Sha256 = 'D226A2E142B4CD796DF9DB527F4F3FF79BC9CE4118B36DCD7C82B7ECA557D0B8' },
     [pscustomobject]@{ RelativePath = 'dist\2026-06-30\rustfmt-1.96.1-x86_64-pc-windows-msvc.tar.xz'; Sha256 = '016402149CB21DD57D0A12A0EA28958DC010B2F22095C922AB981C6C912CE33A' }
 )
-$rustCacheRoot = 'C:\HerdrBoxCache\rust'
+$rustCacheRoot = 'C:\HerdrSandbox\cache\rust'
 $rustEntryName = '1.96.1-x86_64-pc-windows-msvc-87eb76c53073e72b'
 $rustEntryDirectory = Join-Path $rustCacheRoot $rustEntryName
-$rustGuestStage = Join-Path 'C:\HerdrRustMirrorStage' ([Guid]::NewGuid().ToString('N'))
+$rustGuestStage = Join-Path 'C:\HerdrSandbox\staging\rust-mirror' ([Guid]::NewGuid().ToString('N'))
 $rustGuestMirror = Join-Path $rustGuestStage 'mirror'
 $rustLock = $null
 $rustServer = $null

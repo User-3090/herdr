@@ -21,7 +21,7 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 
 const BRIDGE_ACCEPT_POLL: Duration = Duration::from_millis(50);
 const CURRENT_PROTOCOL: u32 = crate::protocol::PROTOCOL_VERSION;
-const REMOTE_HERDR_PATH: &str = r"C:\Herdr\herdr.exe";
+const REMOTE_HERDR_PATH: &str = r"C:\HerdrSandbox\runtime\herdr\herdr.exe";
 
 pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
 pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
@@ -587,11 +587,11 @@ mod tests {
     fn windows_remote_bridge_uses_concrete_guest_executable() {
         assert_eq!(
             remote_bridge_command(crate::session::DEFAULT_SESSION_NAME),
-            "& 'C:\\Herdr\\herdr.exe' remote-client-bridge"
+            "& 'C:\\HerdrSandbox\\runtime\\herdr\\herdr.exe' remote-client-bridge"
         );
         assert_eq!(
             remote_bridge_command("agent's work"),
-            "& 'C:\\Herdr\\herdr.exe' --session 'agent''s work' remote-client-bridge"
+            "& 'C:\\HerdrSandbox\\runtime\\herdr\\herdr.exe' --session 'agent''s work' remote-client-bridge"
         );
     }
 
@@ -615,7 +615,7 @@ mod tests {
                 "-F".to_string(),
                 r"C:\Runs\one\.ssh\config".to_string(),
                 "sandbox".to_string(),
-                "& 'C:\\Herdr\\herdr.exe' remote-client-bridge".to_string(),
+                "& 'C:\\HerdrSandbox\\runtime\\herdr\\herdr.exe' remote-client-bridge".to_string(),
             ]
         );
     }
