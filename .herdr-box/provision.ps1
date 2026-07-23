@@ -687,8 +687,8 @@ function Publish-HerdrRustMirrorCacheEntry {
 Write-Output 'Installing Python...'
 Install-ProvisioningWinGetPackage -Role 'Python' -Id 'Python.Python.3.13' -InstallerType 'burn' `
     -Scope 'machine' -Adapter 'Burn' -ExecutableName 'python.exe' `
-    -CommandSourceExclusion '*\Microsoft\WindowsApps\python.exe' -RequireAuthenticodeSignature
-$pythonVersion = Assert-ProvisioningCommand -Role 'Python' -Name 'python.exe' -VersionArguments @('--version') -ExpectedPattern '^Python 3\.13\.\d+$'
+    -CommandSourceExclusion '*\Microsoft\WindowsApps\python.exe' -DeferCommandReadiness `
+    -RequireAuthenticodeSignature
 
 Write-Output 'Installing Zig...'
 Install-ProvisioningWinGetPackage -Role 'Zig' -Id 'zig.zig' -Version '0.15.2' `
@@ -780,6 +780,10 @@ try {
     $env:RUSTUP_AUTO_INSTALL = '0'
     $env:NO_PROXY = '127.0.0.1,localhost'
     $env:no_proxy = $env:NO_PROXY
+    Wait-ProvisioningCommandAvailable -Role 'Python' -Name 'python.exe' `
+        -CommandSourceExclusion '*\Microsoft\WindowsApps\python.exe' | Out-Null
+    $pythonVersion = Assert-ProvisioningCommand -Role 'Python' -Name 'python.exe' `
+        -VersionArguments @('--version') -ExpectedPattern '^Python 3\.13\.\d+$'
     $pythonCommand = Get-Command 'python.exe' -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $rustServerOutput = Join-Path $rustGuestStage 'server.stdout.log'
     $rustServerError = Join-Path $rustGuestStage 'server.stderr.log'
