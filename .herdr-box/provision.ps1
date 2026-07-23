@@ -7,10 +7,15 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $herdrProvisioningStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-function Get-HerdrVisualStudioCurrentTarget {
-    $channelURI = 'https://aka.ms/vs/17/release/channel'
-    $response = Invoke-WebRequest -Uri $channelURI -UseBasicParsing -ErrorAction Stop
-    $channel = ([string]$response.Content) | ConvertFrom-Json
+function Get-HerdrVisualStudioTargetFromChannel {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Channel,
+        [Parameter(Mandatory = $true)]
+        [string]$SourceDescription
+    )
+
+    $channel = $Channel
     if ([string]$channel.manifestVersion -cne '1.1' -or
         [string]$channel.info.manifestName -cne 'VisualStudio.17.Release' -or
         [string]$channel.info.manifestType -cne 'channel' -or
@@ -18,7 +23,7 @@ function Get-HerdrVisualStudioCurrentTarget {
         [string]$channel.info.productLineVersion -cne '2022' -or
         [string]$channel.info.productMilestone -cne 'RTW' -or
         [string]$channel.info.productMilestoneIsPreRelease -cne 'False') {
-        throw 'Visual Studio Current channel metadata is unexpected.'
+        throw "Visual Studio channel metadata is unexpected: $SourceDescription"
     }
     $products = @($channel.channelItems | Where-Object {
         [string]$_.type -ceq 'ChannelProduct' -and
@@ -33,12 +38,12 @@ function Get-HerdrVisualStudioCurrentTarget {
         [string]$_.id -ceq 'VisualStudio.17.Release.Bootstrappers.Setup'
     })
     if ($products.Count -ne 1 -or $manifests.Count -ne 1 -or $setups.Count -ne 1) {
-        throw 'Visual Studio Current channel did not resolve one Build Tools product, manifest, and setup bootstrapper.'
+        throw "Visual Studio channel did not resolve one Build Tools product, manifest, and setup bootstrapper: $SourceDescription"
     }
     $catalogPayloads = @($manifests[0].payloads | Where-Object { [string]$_.fileName -ceq 'VisualStudio.vsman' })
     $setupPayloads = @($setups[0].payloads | Where-Object { [string]$_.fileName -ceq 'vs_Setup.exe' })
     if ($catalogPayloads.Count -ne 1 -or $setupPayloads.Count -ne 1) {
-        throw 'Visual Studio Current channel payload selection is ambiguous.'
+        throw "Visual Studio channel payload selection is ambiguous: $SourceDescription"
     }
     $buildVersion = [string]$channel.info.buildVersion
     $semanticVersion = [string]$channel.info.productSemanticVersion
@@ -46,17 +51,16 @@ function Get-HerdrVisualStudioCurrentTarget {
         [string]::IsNullOrWhiteSpace($semanticVersion) -or
         [string]$products[0].version -cne $buildVersion -or
         [string]$manifests[0].version -cne $buildVersion) {
-        throw 'Visual Studio Current channel version fields disagree.'
+        throw "Visual Studio channel version fields disagree: $SourceDescription"
     }
     foreach ($payload in @($catalogPayloads[0], $setupPayloads[0])) {
         $uri = [Uri][string]$payload.url
         if ($uri.Scheme -cne 'https' -or $uri.Host -cne 'download.visualstudio.microsoft.com' -or
             [string]$payload.sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
-            throw "Visual Studio Current channel payload is unsafe: $($payload.fileName)"
+            throw "Visual Studio channel payload is unsafe in $SourceDescription`: $($payload.fileName)"
         }
     }
     return [pscustomobject]@{
-        ChannelURI = $channelURI
         ChannelID = [string]$channel.info.id
         BuildVersion = $buildVersion
         SemanticVersion = $semanticVersion
@@ -65,6 +69,18 @@ function Get-HerdrVisualStudioCurrentTarget {
         SetupVersion = [string]$setups[0].version
         SetupSHA256 = ([string]$setupPayloads[0].sha256).ToUpperInvariant()
     }
+}
+
+function Get-HerdrVisualStudioCurrentTarget {
+    $channelURI = 'https://aka.ms/vs/17/release/channel'
+    $response = Invoke-WebRequest -Uri $channelURI -UseBasicParsing -ErrorAction Stop
+    $channelText = if ($response.Content -is [byte[]]) {
+        [Text.Encoding]::UTF8.GetString([byte[]]$response.Content)
+    } else {
+        [string]$response.Content
+    }
+    $channel = $channelText | ConvertFrom-Json
+    return Get-HerdrVisualStudioTargetFromChannel -Channel $channel -SourceDescription $channelURI
 }
 
 function Test-HerdrVisualStudioTargetEqual {
@@ -164,6 +180,62 @@ function Get-HerdrVisualStudioRequiredArtifacts {
     )
 }
 
+function Assert-HerdrVisualStudioLayoutIdentity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Layout,
+        [Parameter(Mandatory = $true)]
+        [object]$Target
+    )
+
+    if (-not (Test-Path -LiteralPath $Layout -PathType Container)) {
+        throw "Visual Studio layout directory is missing: $Layout"
+    }
+    Assert-ProvisioningCachePath -Path $Layout
+    $catalogPath = Join-Path $Layout 'Catalog.json'
+    $channelManifestPath = Join-Path $Layout 'ChannelManifest.json'
+    $layoutPath = Join-Path $Layout 'layout.json'
+    foreach ($path in @($catalogPath, $channelManifestPath, $layoutPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Visual Studio layout identity file is missing: $path"
+        }
+        Assert-ProvisioningCachePath -Path $path
+    }
+
+    $localChannel = [IO.File]::ReadAllText($channelManifestPath) | ConvertFrom-Json
+    $localTarget = Get-HerdrVisualStudioTargetFromChannel -Channel $localChannel `
+        -SourceDescription $channelManifestPath
+    if (-not (Test-HerdrVisualStudioTargetEqual -Left $Target -Right $localTarget)) {
+        throw 'Visual Studio layout channel identity does not match the resolved Current target.'
+    }
+    $actualCatalogHash = (Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($actualCatalogHash -cne $Target.CatalogSHA256) {
+        throw "Visual Studio layout catalog hash does not match the resolved Current target: $actualCatalogHash"
+    }
+    $catalog = [IO.File]::ReadAllText($catalogPath) | ConvertFrom-Json
+    if ([string]$catalog.info.manifestName -cne 'VisualStudio' -or
+        [string]$catalog.info.manifestType -cne 'installer' -or
+        [string]$catalog.info.buildVersion -cne $Target.BuildVersion -or
+        [string]$catalog.info.productSemanticVersion -cne $Target.SemanticVersion -or
+        [string]$catalog.info.productLine -cne 'Dev17' -or
+        [string]$catalog.info.productLineVersion -cne '2022' -or
+        [string]$catalog.info.productMilestone -cne 'RTW' -or
+        [string]$catalog.info.productMilestoneIsPreRelease -cne 'False' -or
+        [string]::IsNullOrWhiteSpace([string]$catalog.info.requiredEngineVersion)) {
+        throw 'Visual Studio layout catalog identity is unexpected.'
+    }
+    $layoutText = [IO.File]::ReadAllText($layoutPath)
+    $layoutConfig = $layoutText | ConvertFrom-Json
+    if ([string]$layoutConfig.channelId -cne 'VisualStudio.17.Release' -or
+        [string]$layoutConfig.productId -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
+        [string]$layoutConfig.arch -cne 'x64' -or
+        $layoutText -notmatch 'Microsoft\.VisualStudio\.Workload\.VCTools' -or
+        $layoutText -notmatch 'includeRecommended' -or
+        $layoutText -match 'includeOptional') {
+        throw 'Visual Studio layout configuration identity is unexpected.'
+    }
+}
+
 function Test-HerdrVisualStudioLayoutSlot {
     param(
         [Parameter(Mandatory = $true)]
@@ -214,32 +286,7 @@ function Test-HerdrVisualStudioLayoutSlot {
         $bootstrapper = Join-Path $layout 'vs_BuildTools.exe'
         Assert-HerdrVisualStudioBootstrapper -Path $bootstrapper `
             -ExpectedSHA256 ([string]$descriptor.bootstrapperSHA256)
-        $catalogPath = Join-Path $layout 'Catalog.json'
-        if ((Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToUpperInvariant() -cne $Target.CatalogSHA256) {
-            return $false
-        }
-        $catalog = [IO.File]::ReadAllText($catalogPath) | ConvertFrom-Json
-        if ([string]$catalog.info.manifestName -cne 'VisualStudio' -or
-            [string]$catalog.info.manifestType -cne 'installer' -or
-            [string]$catalog.info.buildVersion -cne $Target.BuildVersion -or
-            [string]$catalog.info.productSemanticVersion -cne $Target.SemanticVersion -or
-            [string]$catalog.info.productLine -cne 'Dev17' -or
-            [string]$catalog.info.productLineVersion -cne '2022' -or
-            [string]$catalog.info.productMilestone -cne 'RTW' -or
-            [string]$catalog.info.productMilestoneIsPreRelease -cne 'False' -or
-            [string]::IsNullOrWhiteSpace([string]$catalog.info.requiredEngineVersion)) {
-            return $false
-        }
-        $layoutText = [IO.File]::ReadAllText((Join-Path $layout 'layout.json'))
-        $layoutConfig = $layoutText | ConvertFrom-Json
-        if ([string]$layoutConfig.channelId -cne 'VisualStudio.17.Release' -or
-            [string]$layoutConfig.productId -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
-            [string]$layoutConfig.arch -cne 'x64' -or
-            $layoutText -notmatch 'Microsoft\.VisualStudio\.Workload\.VCTools' -or
-            $layoutText -notmatch 'includeRecommended' -or
-            $layoutText -match 'includeOptional') {
-            return $false
-        }
+        Assert-HerdrVisualStudioLayoutIdentity -Layout $layout -Target $Target
         return $true
     } catch {
         return $false
@@ -338,7 +385,7 @@ function Install-HerdrVisualStudioBuildTools {
             $bootstrapperInfo = Save-HerdrVisualStudioBootstrapper -Destination $guestBootstrapper
             Invoke-ProvisioningNative -Role 'Visual Studio Build Tools layout download' -FilePath $guestBootstrapper `
                 -ArgumentList @('--layout', $layout, '--add', 'Microsoft.VisualStudio.Workload.VCTools',
-                    '--includeRecommended', '--lang', 'en-US', '--arch', 'x64', '--passive', '--wait') | Out-Null
+                    '--includeRecommended', '--lang', 'en-US', '--passive', '--wait') | Out-Null
             if (-not (Test-Path -LiteralPath $cachedBootstrapper -PathType Leaf)) {
                 Copy-Item -LiteralPath $guestBootstrapper -Destination $cachedBootstrapper
             }
@@ -346,6 +393,7 @@ function Install-HerdrVisualStudioBuildTools {
             Assert-HerdrVisualStudioBootstrapper -Path $cachedBootstrapper -ExpectedSHA256 $bootstrapperInfo.SHA256
             Invoke-ProvisioningNative -Role 'Visual Studio Build Tools layout verification' -FilePath $guestBootstrapper `
                 -ArgumentList @('--layout', $layout, '--verify', '--passive', '--wait') | Out-Null
+            Assert-HerdrVisualStudioLayoutIdentity -Layout $layout -Target $target
             $currentAfterDownload = Get-HerdrVisualStudioCurrentTarget
             if (-not (Test-HerdrVisualStudioTargetEqual -Left $target -Right $currentAfterDownload)) {
                 throw 'Visual Studio Current channel changed while the layout was downloading; prior layout remains active.'
