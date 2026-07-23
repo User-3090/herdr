@@ -7,6 +7,24 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $herdrProvisioningStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
+function Get-HerdrWebResponseText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Response
+    )
+
+    if ($null -eq $Response.Content) {
+        throw 'Unexpected empty web response content.'
+    }
+    if ($Response.Content -is [byte[]]) {
+        return [Text.Encoding]::UTF8.GetString([byte[]]$Response.Content)
+    }
+    if ($Response.Content -is [string]) {
+        return [string]$Response.Content
+    }
+    throw "Unexpected web response content type: $($Response.Content.GetType().FullName)"
+}
+
 function Get-HerdrVisualStudioTargetFromChannel {
     param(
         [Parameter(Mandatory = $true)]
@@ -74,11 +92,7 @@ function Get-HerdrVisualStudioTargetFromChannel {
 function Get-HerdrVisualStudioCurrentTarget {
     $channelURI = 'https://aka.ms/vs/17/release/channel'
     $response = Invoke-WebRequest -Uri $channelURI -UseBasicParsing -ErrorAction Stop
-    $channelText = if ($response.Content -is [byte[]]) {
-        [Text.Encoding]::UTF8.GetString([byte[]]$response.Content)
-    } else {
-        [string]$response.Content
-    }
+    $channelText = Get-HerdrWebResponseText -Response $response
     $channel = $channelText | ConvertFrom-Json
     return Get-HerdrVisualStudioTargetFromChannel -Channel $channel -SourceDescription $channelURI
 }
@@ -801,10 +815,12 @@ try {
         }
         try {
             $response = Invoke-WebRequest -Uri $probeURI -UseBasicParsing -TimeoutSec 1
-            $body = [string]$response.Content
+            $body = Get-HerdrWebResponseText -Response $response
             if ($response.StatusCode -eq 200 -and $body.Length -ge 64 -and
                 $body.Substring(0, 64) -ieq '87eb76c53073e72b766083bed5530820694253b832a762d8385bda5759f03975') {
                 $serverReady = $true
+            } else {
+                $lastProbeError = "unexpected HTTP response status=$($response.StatusCode) characters=$($body.Length)"
             }
         } catch {
             $lastProbeError = $_.Exception.Message
