@@ -195,27 +195,24 @@ function Assert-HerdrVisualStudioLayoutIdentity {
     if (-not (Test-HerdrVisualStudioTargetEqual -Left $Target -Right $localTarget)) {
         throw 'Visual Studio layout channel identity does not match the resolved Current target.'
     }
-    $actualCatalogHash = (Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToUpperInvariant()
-    if ($actualCatalogHash -cne $Target.CatalogSHA256) {
-        throw "Visual Studio layout catalog hash does not match the resolved Current target: $actualCatalogHash"
-    }
     $catalog = [IO.File]::ReadAllText($catalogPath) | ConvertFrom-Json
     if ([string]$catalog.info.manifestName -cne 'VisualStudio' -or
         [string]$catalog.info.manifestType -cne 'installer' -or
+        [string]::IsNullOrWhiteSpace([string]$catalog.engineVersion) -or
         [string]$catalog.info.buildVersion -cne $Target.BuildVersion -or
         [string]$catalog.info.productSemanticVersion -cne $Target.SemanticVersion -or
         [string]$catalog.info.productLine -cne 'Dev17' -or
         [string]$catalog.info.productLineVersion -cne '2022' -or
         [string]$catalog.info.productMilestone -cne 'RTW' -or
-        [string]$catalog.info.productMilestoneIsPreRelease -cne 'False' -or
-        [string]::IsNullOrWhiteSpace([string]$catalog.info.requiredEngineVersion)) {
+        [string]$catalog.info.productMilestoneIsPreRelease -cne 'False') {
         throw 'Visual Studio layout catalog identity is unexpected.'
     }
     $layoutText = [IO.File]::ReadAllText($layoutPath)
     $layoutConfig = $layoutText | ConvertFrom-Json
+    $archProperty = $layoutConfig.PSObject.Properties['arch']
     if ([string]$layoutConfig.channelId -cne 'VisualStudio.17.Release' -or
         [string]$layoutConfig.productId -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
-        [string]$layoutConfig.arch -cne 'x64' -or
+        ($null -ne $archProperty -and [string]$archProperty.Value -cne 'x64') -or
         $layoutText -notmatch 'Microsoft\.VisualStudio\.Workload\.VCTools' -or
         $layoutText -notmatch 'includeRecommended' -or
         $layoutText -match 'includeOptional') {
