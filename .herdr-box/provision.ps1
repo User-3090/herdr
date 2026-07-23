@@ -162,6 +162,13 @@ function Get-HerdrVisualStudioRequiredArtifacts {
     )
 }
 
+function Get-HerdrVisualStudioComponentIDs {
+    return @(
+        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+        'Microsoft.VisualStudio.Component.Windows11SDK.26100'
+    )
+}
+
 function Assert-HerdrVisualStudioLayoutIdentity {
     param(
         [Parameter(Mandatory = $true)]
@@ -210,12 +217,14 @@ function Assert-HerdrVisualStudioLayoutIdentity {
     $layoutText = [IO.File]::ReadAllText($layoutPath)
     $layoutConfig = $layoutText | ConvertFrom-Json
     $archProperty = $layoutConfig.PSObject.Properties['arch']
+    $expectedComponents = @(Get-HerdrVisualStudioComponentIDs | Sort-Object)
+    $actualComponents = @(@($layoutConfig.add) | ForEach-Object { [string]$_ } | Sort-Object)
     if ([string]$layoutConfig.channelId -cne 'VisualStudio.17.Release' -or
         [string]$layoutConfig.productId -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
         ($null -ne $archProperty -and [string]$archProperty.Value -cne 'x64') -or
-        $layoutText -notmatch 'Microsoft\.VisualStudio\.Workload\.VCTools' -or
-        $layoutText -notmatch 'includeRecommended' -or
-        $layoutText -match 'includeOptional') {
+        ($actualComponents -join '|') -cne ($expectedComponents -join '|') -or
+        $layoutText -match 'Microsoft\.VisualStudio\.Workload\.' -or
+        $layoutText -match 'includeRecommended|includeOptional') {
         throw 'Visual Studio layout configuration identity is unexpected.'
     }
 }
@@ -281,11 +290,13 @@ function Test-HerdrVisualStudioLayoutSlot {
         Assert-ProvisioningCachePath -Path $descriptorPath
         $descriptor = [IO.File]::ReadAllText($descriptorPath) | ConvertFrom-Json
         $expectedProperties = @('artifacts', 'bootstrapperSHA256', 'bootstrapperURL', 'buildVersion',
-            'catalogSHA256', 'channelID', 'productID', 'productVersion', 'schemaVersion',
-            'semanticVersion', 'setupSHA256', 'setupVersion', 'workloadID')
+            'catalogSHA256', 'channelID', 'componentIDs', 'productID', 'productVersion',
+            'schemaVersion', 'semanticVersion', 'setupSHA256', 'setupVersion')
         $actualProperties = @($descriptor.PSObject.Properties.Name | Sort-Object)
+        $expectedComponents = @(Get-HerdrVisualStudioComponentIDs | Sort-Object)
+        $actualComponents = @(@($descriptor.componentIDs) | ForEach-Object { [string]$_ } | Sort-Object)
         if (($actualProperties -join '|') -cne (($expectedProperties | Sort-Object) -join '|') -or
-            [int]$descriptor.schemaVersion -ne 1 -or
+            [int]$descriptor.schemaVersion -ne 2 -or
             [string]$descriptor.channelID -cne $Target.ChannelID -or
             [string]$descriptor.buildVersion -cne $Target.BuildVersion -or
             [string]$descriptor.semanticVersion -cne $Target.SemanticVersion -or
@@ -294,7 +305,7 @@ function Test-HerdrVisualStudioLayoutSlot {
             [string]$descriptor.setupVersion -cne $Target.SetupVersion -or
             [string]$descriptor.setupSHA256 -cne $Target.SetupSHA256 -or
             [string]$descriptor.productID -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
-            [string]$descriptor.workloadID -cne 'Microsoft.VisualStudio.Workload.VCTools') {
+            ($actualComponents -join '|') -cne ($expectedComponents -join '|')) {
             return $false
         }
         $required = @(Get-HerdrVisualStudioRequiredArtifacts)
@@ -319,8 +330,36 @@ function Test-HerdrVisualStudioLayoutSlot {
     }
 }
 
+function Invoke-HerdrVisualStudioInstaller {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+        [int]$TimeoutSeconds = 900
+    )
+
+    Write-ProvisioningProgress -Message 'Visual Studio Build Tools offline installation'
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $process = $null
+    try {
+        $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
+            throw "Visual Studio Build Tools installer exceeded $TimeoutSeconds seconds."
+        }
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Visual Studio Build Tools installer failed with exit code $($process.ExitCode)."
+        }
+    } finally {
+        if ($null -ne $process) { $process.Dispose() }
+        $stopwatch.Stop()
+        Write-ProvisioningTiming -Role 'Visual Studio Build Tools offline installation' `
+            -Seconds $stopwatch.Elapsed.TotalSeconds
+    }
+}
+
 function Wait-HerdrVisualStudioInstalled {
-    param([int]$TimeoutSeconds = 1800)
+    param([int]$TimeoutSeconds = 120)
 
     $vswhere = [string](Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe')
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -330,12 +369,13 @@ function Wait-HerdrVisualStudioInstalled {
             try {
                 $ErrorActionPreference = 'Continue'
                 $installationPath = @(& $vswhere '-latest' '-products' '*' '-requires' `
-                    'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' '-property' 'installationPath' 2>&1)
+                    'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' `
+                    'Microsoft.VisualStudio.Component.Windows11SDK.26100' '-property' 'installationPath' 2>&1)
                 $exitCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $previousErrorActionPreference
             }
-            if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace(($installationPath -join ' ').Trim())) {
+            if ($exitCode -eq 0 -and ($installationPath -join ' ').Trim() -ieq 'C:\BuildTools') {
                 return
             }
         }
@@ -382,13 +422,25 @@ function Install-HerdrVisualStudioBuildTools {
         Assert-HerdrVisualStudioLayoutIdentity -Layout $guestLayout -Target $target -GuestLocal
         $channelManifest = Join-Path $guestLayout 'ChannelManifest.json'
         $catalog = Join-Path $guestLayout 'Catalog.json'
-        Invoke-ProvisioningNative -Role 'Visual Studio Build Tools offline installation' -FilePath $guestLayoutBootstrapper `
-            -ArgumentList @('--noWeb', '--noUpdateInstaller', '--wait', '--quiet', '--norestart', '--nocache',
-                '--installPath', 'C:\BuildTools', '--channelId', 'VisualStudio.17.Release',
-                '--productId', 'Microsoft.VisualStudio.Product.BuildTools', '--channelUri', $channelManifest,
-                '--installChannelUri', $channelManifest, '--installCatalogUri', $catalog,
-                '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended',
-                '--addProductLang', 'en-US') | Out-Null
+        $installationArguments = @('--noWeb', '--noUpdateInstaller', '--wait', '--quiet', '--norestart',
+            '--installPath', 'C:\BuildTools', '--channelId', 'VisualStudio.17.Release',
+            '--productId', 'Microsoft.VisualStudio.Product.BuildTools', '--channelUri', $channelManifest,
+            '--installChannelUri', $channelManifest, '--installCatalogUri', $catalog)
+        foreach ($componentID in @(Get-HerdrVisualStudioComponentIDs)) {
+            $installationArguments += @('--add', $componentID)
+        }
+        $installationArguments += @('--addProductLang', 'en-US')
+        $installerEngine = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
+        foreach ($rule in @(
+            @{ Name = 'HerdrBox-VSBootstrapper-In'; Direction = 'Inbound'; Program = $guestLayoutBootstrapper },
+            @{ Name = 'HerdrBox-VSBootstrapper-Out'; Direction = 'Outbound'; Program = $guestLayoutBootstrapper },
+            @{ Name = 'HerdrBox-VSInstaller-In'; Direction = 'Inbound'; Program = $installerEngine },
+            @{ Name = 'HerdrBox-VSInstaller-Out'; Direction = 'Outbound'; Program = $installerEngine }
+        )) {
+            New-NetFirewallRule -Name $rule.Name -DisplayName $rule.Name -Enabled True `
+                -Direction $rule.Direction -Program $rule.Program -Action Block | Out-Null
+        }
+        Invoke-HerdrVisualStudioInstaller -FilePath $guestLayoutBootstrapper -ArgumentList $installationArguments
         Wait-HerdrVisualStudioInstalled
         foreach ($slot in @($slotA, $slotB)) {
             if ($slot -ine $selectedSlot -and (Test-Path -LiteralPath $slot)) {
@@ -401,17 +453,6 @@ function Install-HerdrVisualStudioBuildTools {
     } finally {
         if ($null -ne $lock) {
             try { $lock.Dispose() } catch { $cleanupFailure = $_ }
-        }
-        try {
-            $fullGuestLayout = [IO.Path]::GetFullPath($guestLayout).TrimEnd('\')
-            if ($fullGuestLayout -cne 'C:\HerdrVisualStudioLayout') {
-                throw "Unexpected Visual Studio guest layout cleanup path: $fullGuestLayout"
-            }
-            if (Test-Path -LiteralPath $fullGuestLayout) {
-                Remove-Item -LiteralPath $fullGuestLayout -Recurse -Force
-            }
-        } catch {
-            Write-Warning "Visual Studio guest-layout cleanup was deferred: $($_.Exception.Message)"
         }
         $visualStudioStopwatch.Stop()
         Write-ProvisioningTiming -Role 'Visual Studio Build Tools total' `
@@ -638,9 +679,22 @@ $env:CARGO_TARGET_DIR = 'C:\HerdrTarget'
 $env:ZIG_LOCAL_CACHE_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-local-cache'
 $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-global-cache'
 $env:LIBGHOSTTY_VT_ZIG_OUT_DIR = Join-Path $env:CARGO_TARGET_DIR 'zig-out'
+$env:RUSTUP_AUTO_INSTALL = '0'
 foreach ($directory in @($env:RUSTUP_HOME, $env:CARGO_HOME, $env:CARGO_TARGET_DIR,
     $env:ZIG_LOCAL_CACHE_DIR, $env:ZIG_GLOBAL_CACHE_DIR, $env:LIBGHOSTTY_VT_ZIG_OUT_DIR)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
+}
+$machineEnvironment = [ordered]@{
+    RUSTUP_HOME = $env:RUSTUP_HOME
+    CARGO_HOME = $env:CARGO_HOME
+    CARGO_TARGET_DIR = $env:CARGO_TARGET_DIR
+    ZIG_LOCAL_CACHE_DIR = $env:ZIG_LOCAL_CACHE_DIR
+    ZIG_GLOBAL_CACHE_DIR = $env:ZIG_GLOBAL_CACHE_DIR
+    LIBGHOSTTY_VT_ZIG_OUT_DIR = $env:LIBGHOSTTY_VT_ZIG_OUT_DIR
+    RUSTUP_AUTO_INSTALL = $env:RUSTUP_AUTO_INSTALL
+}
+foreach ($entry in $machineEnvironment.GetEnumerator()) {
+    [Environment]::SetEnvironmentVariable([string]$entry.Key, [string]$entry.Value, 'Machine')
 }
 Install-ProvisioningWinGetPackage -Role 'Rustup' -Id 'Rustlang.Rustup' -InstallerType 'exe' `
     -Adapter 'Rustup' -InstallerArguments @('-y', '-q', '--no-modify-path', '--default-host', $rustTriple,
