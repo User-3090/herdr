@@ -5,6 +5,444 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+$herdrProvisioningStopwatch = [Diagnostics.Stopwatch]::StartNew()
+
+function Get-HerdrVisualStudioCurrentTarget {
+    $channelURI = 'https://aka.ms/vs/17/release/channel'
+    $response = Invoke-WebRequest -Uri $channelURI -UseBasicParsing -ErrorAction Stop
+    $channel = ([string]$response.Content) | ConvertFrom-Json
+    if ([string]$channel.manifestVersion -cne '1.1' -or
+        [string]$channel.info.manifestName -cne 'VisualStudio.17.Release' -or
+        [string]$channel.info.manifestType -cne 'channel' -or
+        [string]$channel.info.productLine -cne 'Dev17' -or
+        [string]$channel.info.productLineVersion -cne '2022' -or
+        [string]$channel.info.productMilestone -cne 'RTW' -or
+        [string]$channel.info.productMilestoneIsPreRelease -cne 'False') {
+        throw 'Visual Studio Current channel metadata is unexpected.'
+    }
+    $products = @($channel.channelItems | Where-Object {
+        [string]$_.type -ceq 'ChannelProduct' -and
+        [string]$_.id -ceq 'Microsoft.VisualStudio.Product.BuildTools'
+    })
+    $manifests = @($channel.channelItems | Where-Object {
+        [string]$_.type -ceq 'Manifest' -and
+        [string]$_.id -ceq 'Microsoft.VisualStudio.Manifests.VisualStudio'
+    })
+    $setups = @($channel.channelItems | Where-Object {
+        [string]$_.type -ceq 'Bootstrapper' -and
+        [string]$_.id -ceq 'VisualStudio.17.Release.Bootstrappers.Setup'
+    })
+    if ($products.Count -ne 1 -or $manifests.Count -ne 1 -or $setups.Count -ne 1) {
+        throw 'Visual Studio Current channel did not resolve one Build Tools product, manifest, and setup bootstrapper.'
+    }
+    $catalogPayloads = @($manifests[0].payloads | Where-Object { [string]$_.fileName -ceq 'VisualStudio.vsman' })
+    $setupPayloads = @($setups[0].payloads | Where-Object { [string]$_.fileName -ceq 'vs_Setup.exe' })
+    if ($catalogPayloads.Count -ne 1 -or $setupPayloads.Count -ne 1) {
+        throw 'Visual Studio Current channel payload selection is ambiguous.'
+    }
+    $buildVersion = [string]$channel.info.buildVersion
+    $semanticVersion = [string]$channel.info.productSemanticVersion
+    if ([string]::IsNullOrWhiteSpace($buildVersion) -or
+        [string]::IsNullOrWhiteSpace($semanticVersion) -or
+        [string]$products[0].version -cne $buildVersion -or
+        [string]$manifests[0].version -cne $buildVersion) {
+        throw 'Visual Studio Current channel version fields disagree.'
+    }
+    foreach ($payload in @($catalogPayloads[0], $setupPayloads[0])) {
+        $uri = [Uri][string]$payload.url
+        if ($uri.Scheme -cne 'https' -or $uri.Host -cne 'download.visualstudio.microsoft.com' -or
+            [string]$payload.sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+            throw "Visual Studio Current channel payload is unsafe: $($payload.fileName)"
+        }
+    }
+    return [pscustomobject]@{
+        ChannelURI = $channelURI
+        ChannelID = [string]$channel.info.id
+        BuildVersion = $buildVersion
+        SemanticVersion = $semanticVersion
+        ProductVersion = [string]$products[0].version
+        CatalogSHA256 = ([string]$catalogPayloads[0].sha256).ToUpperInvariant()
+        SetupVersion = [string]$setups[0].version
+        SetupSHA256 = ([string]$setupPayloads[0].sha256).ToUpperInvariant()
+    }
+}
+
+function Test-HerdrVisualStudioTargetEqual {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Left,
+        [Parameter(Mandatory = $true)]
+        [object]$Right
+    )
+
+    return [string]$Left.ChannelID -ceq [string]$Right.ChannelID -and
+        [string]$Left.BuildVersion -ceq [string]$Right.BuildVersion -and
+        [string]$Left.SemanticVersion -ceq [string]$Right.SemanticVersion -and
+        [string]$Left.ProductVersion -ceq [string]$Right.ProductVersion -and
+        [string]$Left.CatalogSHA256 -ceq [string]$Right.CatalogSHA256 -and
+        [string]$Left.SetupVersion -ceq [string]$Right.SetupVersion -and
+        [string]$Left.SetupSHA256 -ceq [string]$Right.SetupSHA256
+}
+
+function Assert-HerdrVisualStudioBootstrapper {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedSHA256
+    )
+
+    $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($actualHash -cne $ExpectedSHA256) {
+        throw "Visual Studio bootstrapper hash mismatch: $actualHash"
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $null -eq $signature.SignerCertificate) {
+        throw "Visual Studio bootstrapper signature is invalid: $($signature.Status)"
+    }
+    $publisher = $signature.SignerCertificate.GetNameInfo(
+        [Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+    if ($publisher -cne 'Microsoft Corporation' -or
+        $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Microsoft Corporation(,|$)') {
+        throw "Unexpected Visual Studio bootstrapper publisher: $publisher"
+    }
+    $eku = @($signature.SignerCertificate.Extensions |
+        Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+        ForEach-Object { $_.EnhancedKeyUsages } | ForEach-Object { $_.Value })
+    if ('1.3.6.1.5.5.7.3.3' -notin $eku) {
+        throw 'Visual Studio bootstrapper certificate lacks the Code Signing EKU.'
+    }
+}
+
+function Save-HerdrVisualStudioBootstrapper {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $request = [Net.HttpWebRequest]::Create('https://aka.ms/vs/17/release/vs_buildtools.exe')
+    $request.AllowAutoRedirect = $true
+    $request.MaximumAutomaticRedirections = 5
+    $request.UserAgent = 'herdr-box'
+    $response = $null
+    $inputStream = $null
+    $outputStream = $null
+    try {
+        $response = $request.GetResponse()
+        $finalURI = [Uri]$response.ResponseUri
+        if ($finalURI.Scheme -cne 'https' -or $finalURI.Host -cne 'download.visualstudio.microsoft.com' -or
+            $finalURI.AbsolutePath -notmatch '/([A-Fa-f0-9]{64})/vs_BuildTools\.exe$') {
+            throw "Visual Studio evergreen bootstrapper redirected to an unsafe URI: $finalURI"
+        }
+        $expectedHash = $Matches[1].ToUpperInvariant()
+        $inputStream = $response.GetResponseStream()
+        $outputStream = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $inputStream.CopyTo($outputStream)
+        $outputStream.Flush()
+    } finally {
+        if ($null -ne $outputStream) { $outputStream.Dispose() }
+        if ($null -ne $inputStream) { $inputStream.Dispose() }
+        if ($null -ne $response) { $response.Dispose() }
+    }
+    Assert-HerdrVisualStudioBootstrapper -Path $Destination -ExpectedSHA256 $expectedHash
+    return [pscustomobject]@{ Url = [string]$finalURI.AbsoluteUri; SHA256 = $expectedHash }
+}
+
+function Get-HerdrVisualStudioRequiredArtifacts {
+    return @(
+        'vs_BuildTools.exe',
+        'layout.json',
+        'response.json',
+        'Catalog.json',
+        'ChannelManifest.json',
+        'vs_installer.opc',
+        'vs_installer.version.json',
+        'Certificates\manifestRootCertificate.cer',
+        'Certificates\manifestCounterSignRootCertificate.cer',
+        'Certificates\vs_installer_opc.RootCertificate.cer'
+    )
+}
+
+function Test-HerdrVisualStudioLayoutSlot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Slot,
+        [Parameter(Mandatory = $true)]
+        [object]$Target
+    )
+
+    try {
+        if (-not (Test-Path -LiteralPath $Slot -PathType Container)) { return $false }
+        Assert-ProvisioningCachePath -Path $Slot
+        $layout = Join-Path $Slot 'layout'
+        $descriptorPath = Join-Path $Slot 'complete.json'
+        if (-not (Test-Path -LiteralPath $layout -PathType Container) -or
+            -not (Test-Path -LiteralPath $descriptorPath -PathType Leaf)) { return $false }
+        Assert-ProvisioningCachePath -Path $layout
+        Assert-ProvisioningCachePath -Path $descriptorPath
+        $descriptor = [IO.File]::ReadAllText($descriptorPath) | ConvertFrom-Json
+        $expectedProperties = @('artifacts', 'bootstrapperSHA256', 'bootstrapperURL', 'buildVersion',
+            'catalogSHA256', 'channelID', 'productID', 'productVersion', 'schemaVersion',
+            'semanticVersion', 'setupSHA256', 'setupVersion', 'workloadID')
+        $actualProperties = @($descriptor.PSObject.Properties.Name | Sort-Object)
+        if (($actualProperties -join '|') -cne (($expectedProperties | Sort-Object) -join '|') -or
+            [int]$descriptor.schemaVersion -ne 1 -or
+            [string]$descriptor.channelID -cne $Target.ChannelID -or
+            [string]$descriptor.buildVersion -cne $Target.BuildVersion -or
+            [string]$descriptor.semanticVersion -cne $Target.SemanticVersion -or
+            [string]$descriptor.productVersion -cne $Target.ProductVersion -or
+            [string]$descriptor.catalogSHA256 -cne $Target.CatalogSHA256 -or
+            [string]$descriptor.setupVersion -cne $Target.SetupVersion -or
+            [string]$descriptor.setupSHA256 -cne $Target.SetupSHA256 -or
+            [string]$descriptor.productID -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
+            [string]$descriptor.workloadID -cne 'Microsoft.VisualStudio.Workload.VCTools') {
+            return $false
+        }
+        $required = @(Get-HerdrVisualStudioRequiredArtifacts)
+        $artifactProperties = @($descriptor.artifacts.PSObject.Properties)
+        if ($artifactProperties.Count -ne $required.Count) { return $false }
+        foreach ($relativePath in $required) {
+            $path = Join-Path $layout $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+            Assert-ProvisioningCachePath -Path $path
+            $expectedHashProperty = $descriptor.artifacts.PSObject.Properties[$relativePath]
+            if ($null -eq $expectedHashProperty) { return $false }
+            $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant()
+            if ($actualHash -cne [string]$expectedHashProperty.Value) { return $false }
+        }
+        $bootstrapper = Join-Path $layout 'vs_BuildTools.exe'
+        Assert-HerdrVisualStudioBootstrapper -Path $bootstrapper `
+            -ExpectedSHA256 ([string]$descriptor.bootstrapperSHA256)
+        $catalogPath = Join-Path $layout 'Catalog.json'
+        if ((Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToUpperInvariant() -cne $Target.CatalogSHA256) {
+            return $false
+        }
+        $catalog = [IO.File]::ReadAllText($catalogPath) | ConvertFrom-Json
+        if ([string]$catalog.info.manifestName -cne 'VisualStudio' -or
+            [string]$catalog.info.manifestType -cne 'installer' -or
+            [string]$catalog.info.buildVersion -cne $Target.BuildVersion -or
+            [string]$catalog.info.productSemanticVersion -cne $Target.SemanticVersion -or
+            [string]$catalog.info.productLine -cne 'Dev17' -or
+            [string]$catalog.info.productLineVersion -cne '2022' -or
+            [string]$catalog.info.productMilestone -cne 'RTW' -or
+            [string]$catalog.info.productMilestoneIsPreRelease -cne 'False' -or
+            [string]::IsNullOrWhiteSpace([string]$catalog.info.requiredEngineVersion)) {
+            return $false
+        }
+        $layoutText = [IO.File]::ReadAllText((Join-Path $layout 'layout.json'))
+        $layoutConfig = $layoutText | ConvertFrom-Json
+        if ([string]$layoutConfig.channelId -cne 'VisualStudio.17.Release' -or
+            [string]$layoutConfig.productId -cne 'Microsoft.VisualStudio.Product.BuildTools' -or
+            [string]$layoutConfig.arch -cne 'x64' -or
+            $layoutText -notmatch 'Microsoft\.VisualStudio\.Workload\.VCTools' -or
+            $layoutText -notmatch 'includeRecommended' -or
+            $layoutText -match 'includeOptional') {
+            return $false
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-HerdrVisualStudioStoredLayoutSlot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Slot
+    )
+
+    try {
+        $descriptorPath = Join-Path $Slot 'complete.json'
+        if (-not (Test-Path -LiteralPath $descriptorPath -PathType Leaf)) { return $false }
+        Assert-ProvisioningCachePath -Path $descriptorPath
+        $descriptor = [IO.File]::ReadAllText($descriptorPath) | ConvertFrom-Json
+        $storedTarget = [pscustomobject]@{
+            ChannelID = [string]$descriptor.channelID
+            BuildVersion = [string]$descriptor.buildVersion
+            SemanticVersion = [string]$descriptor.semanticVersion
+            ProductVersion = [string]$descriptor.productVersion
+            CatalogSHA256 = [string]$descriptor.catalogSHA256
+            SetupVersion = [string]$descriptor.setupVersion
+            SetupSHA256 = [string]$descriptor.setupSHA256
+        }
+        return Test-HerdrVisualStudioLayoutSlot -Slot $Slot -Target $storedTarget
+    } catch {
+        return $false
+    }
+}
+
+function Assert-HerdrVisualStudioInstalled {
+    $vswhere = [string](Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe')
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        throw "Visual Studio installer locator is missing: $vswhere"
+    }
+    $installationPath = Invoke-ProvisioningNative -Role 'Visual Studio C++ workload check' -FilePath $vswhere `
+        -ArgumentList @('-latest', '-products', '*', '-requires',
+            'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath')
+    if ([string]::IsNullOrWhiteSpace(($installationPath -join ' ').Trim())) {
+        throw 'Visual Studio C++ workload was not found after offline installation.'
+    }
+}
+
+function Install-HerdrVisualStudioBuildTools {
+    $visualStudioStopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $cacheRoot = 'C:\HerdrBoxCache\vsbt'
+    $guestStageRoot = 'C:\HerdrVisualStudioStage'
+    $guestStage = Join-Path $guestStageRoot ([Guid]::NewGuid().ToString('N'))
+    $guestBootstrapper = Join-Path $guestStage 'vs_BuildTools.exe'
+    New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $guestStage -Force | Out-Null
+    Assert-ProvisioningCachePath -Path $cacheRoot
+    $lockPath = Join-Path $cacheRoot '.lock'
+    Assert-ProvisioningCachePath -Path $lockPath
+    $lock = $null
+    $primaryFailure = $null
+    $cleanupFailure = $null
+    try {
+        $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        $target = Get-HerdrVisualStudioCurrentTarget
+        $slotA = Join-Path $cacheRoot 'a'
+        $slotB = Join-Path $cacheRoot 'b'
+        $matchingSlots = @(@($slotA, $slotB) | Where-Object {
+            Test-HerdrVisualStudioLayoutSlot -Slot $_ -Target $target
+        })
+        if ($matchingSlots.Count -gt 1) {
+            $matchingSlots = @($matchingSlots | Select-Object -First 1)
+        }
+        $cacheHit = $matchingSlots.Count -eq 1
+        if ($cacheHit) {
+            $selectedSlot = $matchingSlots[0]
+            Write-Output "Visual Studio Build Tools layout cache hit: $($target.BuildVersion)"
+        } else {
+            Write-Output "Visual Studio Build Tools layout cache miss: $($target.BuildVersion)"
+            $slotAValid = Test-HerdrVisualStudioStoredLayoutSlot -Slot $slotA
+            $slotBValid = Test-HerdrVisualStudioStoredLayoutSlot -Slot $slotB
+            if ($slotAValid) {
+                $selectedSlot = $slotB
+            } elseif ($slotBValid) {
+                $selectedSlot = $slotA
+            } else {
+                $selectedSlot = $slotA
+            }
+            if (Test-Path -LiteralPath $selectedSlot) {
+                Assert-ProvisioningCachePath -Path $selectedSlot
+                Remove-Item -LiteralPath $selectedSlot -Recurse -Force
+            }
+            $layout = Join-Path $selectedSlot 'layout'
+            New-Item -ItemType Directory -Path $layout -Force | Out-Null
+            Assert-ProvisioningCachePath -Path $selectedSlot
+            Assert-ProvisioningCachePath -Path $layout
+            $cachedBootstrapper = Join-Path $layout 'vs_BuildTools.exe'
+            $bootstrapperInfo = Save-HerdrVisualStudioBootstrapper -Destination $guestBootstrapper
+            Invoke-ProvisioningNative -Role 'Visual Studio Build Tools layout download' -FilePath $guestBootstrapper `
+                -ArgumentList @('--layout', $layout, '--add', 'Microsoft.VisualStudio.Workload.VCTools',
+                    '--includeRecommended', '--lang', 'en-US', '--arch', 'x64', '--passive', '--wait') | Out-Null
+            if (-not (Test-Path -LiteralPath $cachedBootstrapper -PathType Leaf)) {
+                Copy-Item -LiteralPath $guestBootstrapper -Destination $cachedBootstrapper
+            }
+            Assert-ProvisioningCachePath -Path $cachedBootstrapper
+            Assert-HerdrVisualStudioBootstrapper -Path $cachedBootstrapper -ExpectedSHA256 $bootstrapperInfo.SHA256
+            Invoke-ProvisioningNative -Role 'Visual Studio Build Tools layout verification' -FilePath $guestBootstrapper `
+                -ArgumentList @('--layout', $layout, '--verify', '--passive', '--wait') | Out-Null
+            $currentAfterDownload = Get-HerdrVisualStudioCurrentTarget
+            if (-not (Test-HerdrVisualStudioTargetEqual -Left $target -Right $currentAfterDownload)) {
+                throw 'Visual Studio Current channel changed while the layout was downloading; prior layout remains active.'
+            }
+        }
+
+        $layout = Join-Path $selectedSlot 'layout'
+        $cachedBootstrapper = Join-Path $layout 'vs_BuildTools.exe'
+        if ($cacheHit) {
+            $descriptor = [IO.File]::ReadAllText((Join-Path $selectedSlot 'complete.json')) | ConvertFrom-Json
+            Copy-Item -LiteralPath $cachedBootstrapper -Destination $guestBootstrapper
+            Assert-HerdrVisualStudioBootstrapper -Path $guestBootstrapper `
+                -ExpectedSHA256 ([string]$descriptor.bootstrapperSHA256)
+            Invoke-ProvisioningNative -Role 'Visual Studio Build Tools cached layout verification' -FilePath $guestBootstrapper `
+                -ArgumentList @('--layout', $layout, '--verify', '--passive', '--wait') | Out-Null
+        }
+        $channelManifest = Join-Path $layout 'ChannelManifest.json'
+        $catalog = Join-Path $layout 'Catalog.json'
+        Invoke-ProvisioningNative -Role 'Visual Studio Build Tools offline installation' -FilePath $guestBootstrapper `
+            -ArgumentList @('--noWeb', '--noUpdateInstaller', '--wait', '--quiet', '--norestart', '--nocache',
+                '--installPath', 'C:\BuildTools', '--channelId', 'VisualStudio.17.Release',
+                '--productId', 'Microsoft.VisualStudio.Product.BuildTools', '--channelUri', $channelManifest,
+                '--installChannelUri', $channelManifest, '--installCatalogUri', $catalog,
+                '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended',
+                '--addProductLang', 'en-US') | Out-Null
+        Assert-HerdrVisualStudioInstalled
+
+        if (-not $cacheHit) {
+            $requiredArtifacts = @(Get-HerdrVisualStudioRequiredArtifacts)
+            $artifactHashes = [ordered]@{}
+            foreach ($relativePath in $requiredArtifacts) {
+                $path = Join-Path $layout $relativePath
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    throw "Visual Studio layout artifact is missing: $relativePath"
+                }
+                Assert-ProvisioningCachePath -Path $path
+                $artifactHashes[$relativePath] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToUpperInvariant()
+            }
+            $descriptor = [ordered]@{
+                schemaVersion = 1
+                channelID = $target.ChannelID
+                buildVersion = $target.BuildVersion
+                semanticVersion = $target.SemanticVersion
+                productVersion = $target.ProductVersion
+                catalogSHA256 = $target.CatalogSHA256
+                setupVersion = $target.SetupVersion
+                setupSHA256 = $target.SetupSHA256
+                bootstrapperURL = $bootstrapperInfo.Url
+                bootstrapperSHA256 = $bootstrapperInfo.SHA256
+                productID = 'Microsoft.VisualStudio.Product.BuildTools'
+                workloadID = 'Microsoft.VisualStudio.Workload.VCTools'
+                artifacts = $artifactHashes
+            } | ConvertTo-Json -Depth 4 -Compress
+            $temporaryDescriptor = Join-Path $selectedSlot 'complete.json.tmp'
+            [IO.File]::WriteAllText($temporaryDescriptor, $descriptor, (New-Object Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath $temporaryDescriptor -Destination (Join-Path $selectedSlot 'complete.json')
+            if (-not (Test-HerdrVisualStudioLayoutSlot -Slot $selectedSlot -Target $target)) {
+                Remove-Item -LiteralPath (Join-Path $selectedSlot 'complete.json') -Force -ErrorAction SilentlyContinue
+                throw 'Published Visual Studio Build Tools layout validation failed.'
+            }
+        }
+        foreach ($slot in @($slotA, $slotB)) {
+            if ($slot -ine $selectedSlot -and (Test-Path -LiteralPath $slot)) {
+                Assert-ProvisioningCachePath -Path $slot
+                Remove-Item -LiteralPath $slot -Recurse -Force
+            }
+        }
+    } catch {
+        $primaryFailure = $_
+    } finally {
+        if ($null -ne $lock) {
+            try { $lock.Dispose() } catch { $cleanupFailure = $_ }
+        }
+        try {
+            $fullGuestStage = [IO.Path]::GetFullPath($guestStage).TrimEnd('\')
+            $fullGuestStageRoot = [IO.Path]::GetFullPath($guestStageRoot).TrimEnd('\')
+            if (-not $fullGuestStage.StartsWith($fullGuestStageRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Visual Studio guest stage escapes its root: $fullGuestStage"
+            }
+            if (Test-Path -LiteralPath $fullGuestStage) {
+                Remove-Item -LiteralPath $fullGuestStage -Recurse -Force
+            }
+        } catch {
+            Write-Warning "Visual Studio guest-stage cleanup was deferred: $($_.Exception.Message)"
+        }
+        $visualStudioStopwatch.Stop()
+        Write-ProvisioningTiming -Role 'Visual Studio Build Tools total' `
+            -Seconds $visualStudioStopwatch.Elapsed.TotalSeconds
+    }
+    if ($null -ne $primaryFailure) {
+        if ($null -ne $cleanupFailure) {
+            Write-Warning "Visual Studio cache cleanup also failed: $($cleanupFailure.Exception.Message)"
+        }
+        throw $primaryFailure
+    }
+    if ($null -ne $cleanupFailure) { throw $cleanupFailure }
+}
 
 function Assert-HerdrRustMirrorPayloads {
     param(
@@ -198,20 +636,6 @@ function Publish-HerdrRustMirrorCacheEntry {
     }
 }
 
-Write-Output 'Installing Visual Studio C++ Build Tools...'
-$buildToolsOverride = '--wait --quiet --norestart --nocache --installPath C:\BuildTools --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
-Install-ProvisioningOnlineWinGetPackage -Role 'Visual Studio Build Tools' `
-    -Id 'Microsoft.VisualStudio.2022.BuildTools' -Override $buildToolsOverride
-$vswhere = [string](Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe')
-if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-    throw "Visual Studio installer locator is missing: $vswhere"
-}
-$buildToolsPath = Invoke-ProvisioningNative -Role 'Visual Studio C++ workload check' -FilePath $vswhere `
-    -ArgumentList @('-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath')
-if ([string]::IsNullOrWhiteSpace(($buildToolsPath -join ' ').Trim())) {
-    throw 'Visual Studio C++ workload was not found after installation.'
-}
-
 Write-Output 'Installing Python...'
 Install-ProvisioningWinGetPackage -Role 'Python' -Id 'Python.Python.3.13' -InstallerType 'burn' `
     -Scope 'machine' -Adapter 'Burn' -ExecutableName 'python.exe' `
@@ -260,6 +684,7 @@ $rustServer = $null
 $rustSetupSucceeded = $false
 $rustPrimaryFailure = $null
 $rustCleanupFailure = $null
+$rustStopwatch = [Diagnostics.Stopwatch]::StartNew()
 New-Item -ItemType Directory -Path $rustCacheRoot -Force | Out-Null
 Assert-ProvisioningCachePath -Path $rustCacheRoot
 New-Item -ItemType Directory -Path $rustGuestMirror -Force | Out-Null
@@ -405,6 +830,8 @@ try {
             }
         }
     }
+    $rustStopwatch.Stop()
+    Write-ProvisioningTiming -Role 'Rust toolchain total' -Seconds $rustStopwatch.Elapsed.TotalSeconds
 }
 if ($null -ne $rustPrimaryFailure) {
     if ($null -ne $rustCleanupFailure) {
@@ -426,23 +853,11 @@ Install-ProvisioningWinGetPackage -Role 'Just' -Id 'Casey.Just' -InstallerType '
     -Adapter 'Portable' -ExecutableName 'just.exe'
 $justVersion = Assert-ProvisioningCommand -Role 'Just' -Name 'just.exe' -VersionArguments @('--version') -ExpectedPattern '^just \d+\.\d+\.\d+$'
 
+Write-Output 'Installing Visual Studio C++ Build Tools...'
+Install-HerdrVisualStudioBuildTools
+
 if (-not (Test-Path -LiteralPath (Join-Path $ProjectDirectory 'Cargo.toml') -PathType Leaf)) {
     throw "Herdr Cargo.toml is missing from mapped project: $ProjectDirectory"
-}
-Push-Location $ProjectDirectory
-try {
-    Invoke-ProvisioningNative -Role 'Herdr portable PTY vendor test' -FilePath 'python.exe' `
-        -ArgumentList @('-m', 'unittest', 'scripts.test_vendor_portable_pty') | Out-Null
-    Invoke-ProvisioningNative -Role 'Herdr formatting check' -FilePath 'cargo.exe' `
-        -ArgumentList @('fmt', '--check') | Out-Null
-    Invoke-ProvisioningNative -Role 'Herdr Windows clippy check' -FilePath 'cargo.exe' `
-        -ArgumentList @('clippy', '--bin', 'herdr', '--locked', '--target', 'x86_64-pc-windows-msvc', '--', '-D', 'warnings') | Out-Null
-    Invoke-ProvisioningNative -Role 'Herdr Windows tests' -FilePath 'cargo.exe' `
-        -ArgumentList @('test', '--locked', '--target', 'x86_64-pc-windows-msvc', '--bin', 'herdr', 'windows_') | Out-Null
-    Invoke-ProvisioningNative -Role 'Herdr Windows build' -FilePath 'cargo.exe' `
-        -ArgumentList @('build', '--locked', '--target', 'x86_64-pc-windows-msvc') | Out-Null
-} finally {
-    Pop-Location
 }
 
 Write-Output "Python ready: $pythonVersion"
@@ -451,3 +866,6 @@ Write-Output "Rust ready: $rustVersion"
 Write-Output "Cargo ready: $cargoVersion"
 Write-Output "Cargo Nextest ready: $nextestVersion"
 Write-Output "Just ready: $justVersion"
+$herdrProvisioningStopwatch.Stop()
+Write-ProvisioningTiming -Role 'Herdr project provisioning total' `
+    -Seconds $herdrProvisioningStopwatch.Elapsed.TotalSeconds
