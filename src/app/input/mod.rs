@@ -71,21 +71,23 @@ use super::App;
 // ---------------------------------------------------------------------------
 
 impl App {
-    pub(super) async fn handle_key(&mut self, key: TerminalKey) {
+    pub(super) async fn handle_key(
+        &mut self,
+        key: TerminalKey,
+    ) -> Option<super::TerminalInputTarget> {
         if self.state.popup_pane.is_some() {
-            self.handle_terminal_key(key).await;
-            return;
+            return self.handle_terminal_key(key).await;
         }
         let key_event = key.as_key_event();
         if modal_paste_target_active(&self.state) && is_modal_paste_shortcut(&key_event) {
             if let Some(text) = crate::platform::read_clipboard_text() {
                 self.paste_into_active_text_input(&text);
             }
-            return;
+            return None;
         }
 
         match self.state.mode {
-            Mode::Terminal => self.handle_terminal_key(key).await,
+            Mode::Terminal => return self.handle_terminal_key(key).await,
             Mode::Prefix => self.handle_prefix_key(key),
             Mode::Navigate => self.handle_navigate_key(key),
             Mode::Copy => self.handle_copy_mode_key(key),
@@ -114,6 +116,7 @@ impl App {
                 Mode::Terminal => unreachable!(),
             },
         }
+        None
     }
 
     pub(super) async fn handle_paste(&mut self, text: String) {
@@ -286,31 +289,13 @@ impl App {
         }
 
         let handled_pane_double_click = self.handle_pane_double_click(mouse);
+        if !handled_pane_double_click {
+            self.focus_pane_before_mouse_press(mouse);
+        }
 
         let previous_agent_panel_sort = self.state.agent_panel_sort;
         let previous_settings_section = self.state.settings.section;
         if !handled_pane_double_click {
-            let right_button = matches!(
-                mouse.kind,
-                MouseEventKind::Down(MouseButton::Right)
-                    | MouseEventKind::Up(MouseButton::Right)
-                    | MouseEventKind::Drag(MouseButton::Right)
-            );
-            let intentional_pane_press = matches!(
-                mouse.kind,
-                MouseEventKind::Down(MouseButton::Left | MouseButton::Middle)
-            );
-            if !right_button
-                && intentional_pane_press
-                && matches!(self.state.mode, Mode::Terminal | Mode::Resize)
-            {
-                if let (Some(ws_idx), Some(info)) = (
-                    self.state.active,
-                    self.state.pane_at(mouse.column, mouse.row).cloned(),
-                ) {
-                    self.focus_pane_internal_via_api(ws_idx, info.id);
-                }
-            }
             if let Some(action) = self.state.handle_mouse(&mut self.terminal_runtimes, mouse) {
                 match action {
                     MouseAction::NewWorkspace => {
@@ -457,6 +442,31 @@ impl App {
         if let Err(err) = rt.try_send_bytes(Bytes::from(bytes)) {
             warn!(err = %err, kind = ?mouse.kind, "failed to forward popup mouse event");
         }
+    }
+
+    fn focus_pane_before_mouse_press(&mut self, mouse: MouseEvent) {
+        if !matches!(self.state.mode, Mode::Terminal | Mode::Resize)
+            || !matches!(
+                mouse.kind,
+                MouseEventKind::Down(MouseButton::Left | MouseButton::Middle)
+            )
+        {
+            return;
+        }
+
+        let Some(pane_id) = self
+            .state
+            .pane_at(mouse.column, mouse.row)
+            .map(|info| info.id)
+        else {
+            return;
+        };
+        let Some(ws_idx) = self.state.active else {
+            return;
+        };
+
+        // Focus through the runtime API before an application can consume its press.
+        self.focus_pane_internal_via_api(ws_idx, pane_id);
     }
 
     fn handle_modified_url_click(&mut self, mouse: MouseEvent) -> bool {
@@ -645,8 +655,12 @@ impl AppState {
             .and_then(|i| self.workspaces.get(i))
             .and_then(|ws| {
                 let tab = ws.active_tab()?;
-                let pane_id = tab.layout.focused();
-                tab.follow_cwd_for_pane(pane_id, &self.terminals, terminal_runtimes)
+                let terminal_id = tab.terminal_id(tab.layout.focused())?;
+                super::creation::launch_cwd_for_terminal(
+                    terminal_id,
+                    &self.terminals,
+                    terminal_runtimes,
+                )
             });
         let cwd = Some(super::creation::resolve_new_terminal_cwd(
             &self.new_terminal_cwd,

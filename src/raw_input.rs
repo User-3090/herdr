@@ -68,7 +68,7 @@ pub fn parse_raw_input_bytes_with_ranges(data: &[u8]) -> Vec<RawInputEventWithRa
         } else if let Ok(text) = std::str::from_utf8(&buffer) {
             if let Some(key) = parse_terminal_key_sequence(text) {
                 events.push(RawInputEventWithRange {
-                    event: RawInputEvent::Key(key),
+                    event: RawInputEvent::Key(key.as_text_commit()),
                     start: offset,
                     len: buffer.len(),
                 });
@@ -755,7 +755,7 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
 
     let consumed = first_complete_utf8_char_len(buffer)?;
     let text = std::str::from_utf8(&buffer[..consumed]).ok()?;
-    let key = parse_terminal_key_sequence(text)?;
+    let key = parse_terminal_key_sequence(text)?.as_text_commit();
     Some((RawInputEvent::Key(key), consumed))
 }
 

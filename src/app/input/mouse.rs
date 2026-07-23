@@ -627,13 +627,7 @@ impl AppState {
                     if self.forward_pane_mouse_button(terminal_runtimes, &info, mouse) {
                         self.selection = None;
                         self.selection_autoscroll = None;
-                        if let Some(ws_idx) = self.active {
-                            return Some(MouseAction::FocusPane {
-                                ws_idx,
-                                pane_id: info.id,
-                            });
-                        }
-                        return None;
+                        return self.mouse_pane_focus_action(info.id);
                     }
 
                     let (row, col) = (
@@ -646,12 +640,7 @@ impl AppState {
                         col,
                         self.pane_scroll_metrics(terminal_runtimes, info.id),
                     ));
-                    if let Some(ws_idx) = self.active {
-                        return Some(MouseAction::FocusPane {
-                            ws_idx,
-                            pane_id: info.id,
-                        });
-                    }
+                    return self.mouse_pane_focus_action(info.id);
                 } else if let Some(info) = self.view.pane_infos.iter().find(|p| {
                     mouse.column >= p.rect.x
                         && mouse.column < p.rect.x + p.rect.width
@@ -662,12 +651,7 @@ impl AppState {
                     if self.mode != Mode::Terminal {
                         self.mode = Mode::Terminal;
                     }
-                    if let Some(ws_idx) = self.active {
-                        return Some(MouseAction::FocusPane {
-                            ws_idx,
-                            pane_id: id,
-                        });
-                    }
+                    return self.mouse_pane_focus_action(id);
                 }
             }
 
@@ -1414,6 +1398,16 @@ impl AppState {
             .or_else(|| self.pane_frame_at(col, row))
     }
 
+    fn mouse_pane_focus_action(&self, pane_id: crate::layout::PaneId) -> Option<MouseAction> {
+        let ws_idx = self.active?;
+        (self
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.focused_pane_id())
+            != Some(pane_id))
+        .then_some(MouseAction::FocusPane { ws_idx, pane_id })
+    }
+
     pub(crate) fn pane_info_by_id(&self, pane_id: crate::layout::PaneId) -> Option<&PaneInfo> {
         self.view.pane_infos.iter().find(|info| info.id == pane_id)
     }
@@ -2066,6 +2060,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn captured_left_press_focuses_target_before_forwarding() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let source = ws.tabs[0].root_pane;
+        let target = ws.test_split(Direction::Horizontal);
+        ws.tabs[0].layout.focus_pane(source);
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let info = app
+            .state
+            .pane_info_by_id(target)
+            .expect("target pane info")
+            .clone();
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                b"\x1b[?1002h\x1b[?1006h",
+                4,
+            );
+        app.state.insert_test_runtime(target, runtime);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            info.inner_rect.x + 1,
+            info.inner_rect.y + 1,
+        ));
+
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(target));
+        assert_eq!(
+            input_rx.try_recv().expect("forwarded captured left press"),
+            Bytes::from_static(b"\x1b[<0;2;2M")
+        );
+    }
+
+    #[tokio::test]
     async fn pane_mouse_only_forwards_moved_events_for_any_motion_apps() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
@@ -2336,6 +2369,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn normal_right_click_keeps_focus_and_exposes_swap_for_reporting_pane() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let source = ws.tabs[0].root_pane;
+        let target = ws.test_split(Direction::Horizontal);
+        ws.tabs[0].layout.focus_pane(source);
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 100, 20));
+        let target_info = app
+            .state
+            .pane_info_by_id(target)
+            .expect("target pane info")
+            .clone();
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                target_info.inner_rect.width,
+                target_info.inner_rect.height,
+                0,
+                b"\x1b[?1002h\x1b[?1006h",
+                4,
+            );
+        app.state.insert_test_runtime(target, runtime);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            target_info.inner_rect.x,
+            target_info.inner_rect.y,
+        ));
+
+        assert!(input_rx.try_recv().is_err());
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(source));
+        let menu = app.state.context_menu.as_mut().expect("pane context menu");
+        assert!(matches!(
+            menu.kind,
+            ContextMenuKind::Pane {
+                pane_id,
+                source_pane_id: Some(source_pane_id),
+                ..
+            } if pane_id == target && source_pane_id == source
+        ));
+        assert!(menu.items().contains(&"Swap with focused pane"));
+    }
+
+    #[tokio::test]
     async fn right_click_passthrough_requires_exact_modifier_match() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
@@ -2357,6 +2436,7 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.view.pane_infos = pane_infos;
+
         app.state.right_click_passthrough_modifiers = Some(KeyModifiers::CONTROL);
 
         let col = info.inner_rect.x + 2;

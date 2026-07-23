@@ -51,7 +51,7 @@ impl App {
         };
         let (rows, cols) = self.state.estimate_pane_size();
         let split_cwd = params.cwd.map(std::path::PathBuf::from).or_else(|| {
-            let follow_cwd = self.follow_cwd_for_pane_in_workspace(ws_idx, target_pane_id);
+            let follow_cwd = self.launch_cwd_for_pane_in_workspace(ws_idx, target_pane_id);
             Some(self.resolve_new_terminal_cwd(follow_cwd))
         });
         let default_shell = self.state.default_shell.clone();
@@ -2569,6 +2569,80 @@ mod tests {
         assert_eq!(app.state.mode, Mode::Copy);
         assert_eq!(app.state.copy_mode.expect("copy mode").pane_id, source);
         assert_eq!(app.state.workspaces[0].tabs[0].layout.focused(), source);
+    }
+
+    #[tokio::test]
+    async fn key_release_follows_pane_moved_across_workspaces() {
+        let mut app = app_with_linked_worktree();
+        let source = app.state.workspaces[0].tabs[0].root_pane;
+        let source_terminal_id = app.state.workspaces[0].tabs[0]
+            .terminal_id(source)
+            .unwrap()
+            .clone();
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80,
+                24,
+                0,
+                b"\x1b[>15u",
+                2,
+            );
+        app.terminal_runtimes.insert(source_terminal_id, runtime);
+        app.state.workspaces.push(Workspace::test_new("other"));
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        let source_public = app.public_pane_id(0, source).unwrap();
+        let target = app.state.workspaces[1].tabs[0].root_pane;
+        let target_tab_id = app.public_tab_id(1, 0).unwrap();
+        let target_pane_id = app.public_pane_id(1, target).unwrap();
+
+        app.route_client_events_from(
+            42,
+            vec![crate::raw_input::RawInputEvent::Key(
+                crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::Char('j'),
+                    crossterm::event::KeyModifiers::empty(),
+                ),
+            )],
+            false,
+        );
+        let response = app.handle_pane_move(
+            "req".into(),
+            PaneMoveParams {
+                pane_id: source_public,
+                destination: PaneMoveDestination::Tab {
+                    tab_id: target_tab_id,
+                    target_pane_id: Some(target_pane_id),
+                    split: SplitDirection::Down,
+                    ratio: None,
+                },
+                focus: false,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(success.result, ResponseResult::PaneMove { .. }));
+        app.route_client_events_from(
+            42,
+            vec![crate::raw_input::RawInputEvent::Key(
+                crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::Char('j'),
+                    crossterm::event::KeyModifiers::empty(),
+                )
+                .with_kind(crossterm::event::KeyEventKind::Release),
+            )],
+            false,
+        );
+
+        assert_eq!(
+            rx.try_recv().expect("forwarded press"),
+            bytes::Bytes::from_static(b"\x1b[106;1:1u")
+        );
+        assert_eq!(
+            rx.try_recv().expect("forwarded release after pane move"),
+            bytes::Bytes::from_static(b"\x1b[106;1:3u")
+        );
+        assert!(app.pressed_terminal_keys.is_empty());
     }
 
     #[test]

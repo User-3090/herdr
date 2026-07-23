@@ -217,7 +217,7 @@ fn windows_crossterm_reader_loop(
             tracing::debug!(event = ?event, "windows control key forwarded as semantic input");
         }
 
-        let Some(event) = crate::protocol::ClientInputEvent::from_crossterm(event) else {
+        let Some(event) = windows_crossterm_input_event(event) else {
             continue;
         };
         if event_tx
@@ -241,6 +241,21 @@ fn windows_host_input_framer(host_color_query_sent: bool) -> crate::raw_input::R
         framer.enable_host_color_scheme_change_tracking();
     }
     framer
+}
+
+#[cfg(any(windows, test))]
+fn windows_crossterm_input_event(
+    event: crossterm::event::Event,
+) -> Option<crate::protocol::ClientInputEvent> {
+    let event = crate::protocol::ClientInputEvent::from_crossterm(event)?;
+    match event {
+        crate::protocol::ClientInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char(codepoint),
+            modifiers: 0,
+            kind: crate::protocol::ClientKeyKind::Press,
+        } => Some(crate::protocol::ClientInputEvent::Text { codepoint }),
+        event => Some(event),
+    }
 }
 
 #[cfg(windows)]
@@ -325,11 +340,22 @@ fn windows_client_input_event_from_raw(
     event: crate::raw_input::RawInputEvent,
 ) -> Option<crate::protocol::ClientInputEvent> {
     match event {
-        crate::raw_input::RawInputEvent::Key(key) => Some(crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::from_crossterm(key.code)?,
-            modifiers: key.modifiers.bits(),
-            kind: crate::protocol::ClientKeyKind::from_crossterm(key.kind),
-        }),
+        crate::raw_input::RawInputEvent::Key(key) if key.is_text_commit => {
+            let crossterm::event::KeyCode::Char(codepoint) = key.code else {
+                return None;
+            };
+            Some(crate::protocol::ClientInputEvent::Text { codepoint })
+        }
+        crate::raw_input::RawInputEvent::Key(key) => {
+            let code = crate::protocol::ClientKeyCode::from_crossterm(key.code)?;
+            let modifiers = key.modifiers.bits();
+            let kind = crate::protocol::ClientKeyKind::from_crossterm(key.kind);
+            Some(crate::protocol::ClientInputEvent::Key {
+                code,
+                modifiers,
+                kind,
+            })
+        }
         crate::raw_input::RawInputEvent::Mouse(mouse) => {
             Some(crate::protocol::ClientInputEvent::Mouse {
                 kind: crate::protocol::ClientMouseKind::from_crossterm(mouse.kind)?,
@@ -491,6 +517,16 @@ mod windows_tests {
         assert_eq!(
             windows_key_raw_bytes(&pending_arrow_tail, true).as_deref(),
             Some(b"[".as_slice())
+        );
+    }
+
+    #[test]
+    fn windows_crossterm_printable_press_is_text() {
+        let event = Event::Key(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::empty()));
+
+        assert_eq!(
+            windows_crossterm_input_event(event),
+            Some(crate::protocol::ClientInputEvent::Text { codepoint: '你' })
         );
     }
 

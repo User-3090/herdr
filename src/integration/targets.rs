@@ -69,6 +69,13 @@ pub(crate) fn install_pi() -> io::Result<PathBuf> {
 
 pub(crate) fn install_omp() -> io::Result<OmpInstallPaths> {
     let dir = omp_extension_dir()?;
+    let pi_dir = pi_extension_dir()?;
+    if dir == pi_dir {
+        return Err(io::Error::other(format!(
+            "Pi and OMP resolve to the same extension directory at {}; configure separate agent directories before installing OMP",
+            dir.display()
+        )));
+    }
     ensure_extension_dir(&dir, "omp")?;
 
     let removed_legacy_pi_extension = remove_legacy_pi_extension_from_omp_dir(&dir)?;

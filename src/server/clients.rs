@@ -64,6 +64,8 @@ pub(crate) struct ClientConnection {
     pane_graphics_render_pending: bool,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
+    /// Last Kitty report-all mode sent to this client's host terminal.
+    pub(crate) host_keyboard_report_all_active: Option<bool>,
     /// Temporary files staged from this client's local clipboard image pastes.
     pub(crate) staged_clipboard_files: Vec<PathBuf>,
     /// Channels for sending framed ServerMessage data to the client writer thread.
@@ -127,6 +129,7 @@ impl ClientConnection {
             render_pending: false,
             pane_graphics_render_pending: false,
             host_mouse_capture_active: None,
+            host_keyboard_report_all_active: None,
             staged_clipboard_files: Vec::new(),
             writer,
         }

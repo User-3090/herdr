@@ -70,6 +70,8 @@ struct ClientState {
     blit_encoder: render_ansi::BlitEncoder,
     /// Whether host mouse capture is currently active.
     mouse_capture_active: bool,
+    /// Whether the host terminal currently reports all keys as Kitty sequences.
+    keyboard_report_all_active: bool,
     /// The terminal size we reported to the server in our last Hello/Resize.
     reported_size: (u16, u16),
     /// Client-local sound playback config, refreshed on server request.
@@ -1372,6 +1374,7 @@ async fn run_client_loop(
     let mut state = ClientState {
         blit_encoder: render_ansi::BlitEncoder::new(),
         mouse_capture_active: config.mouse_capture_active,
+        keyboard_report_all_active: false,
         reported_size: (cols, rows),
         sound_config: config.sound_config,
         kitty_graphics_enabled: config.kitty_graphics_enabled,
@@ -1677,6 +1680,16 @@ async fn run_client_loop(
                         }
                         state.mouse_capture_active = desired;
                         host_mouse_capture_active.store(desired, Ordering::Release);
+                    }
+                }
+                ServerMessage::KittyKeyboardReportAll { enabled } => {
+                    if enabled != state.keyboard_report_all_active {
+                        crate::terminal_modes::set_host_kitty_keyboard_report_all(
+                            &mut io::stdout(),
+                            enabled,
+                        )
+                        .map_err(ClientError::ConnectionFailed)?;
+                        state.keyboard_report_all_active = enabled;
                     }
                 }
                 ServerMessage::PrefixInputSource { active } => {

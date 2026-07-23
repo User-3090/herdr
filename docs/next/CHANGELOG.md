@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+- Relicensed Herdr from AGPL-3.0-or-later to Apache-2.0.
+
+### Fixed
+- OMP integration install, status, and uninstall now respect `PI_CONFIG_DIR` when `PI_CODING_AGENT_DIR` is not set, and installation refuses extension-directory collisions with Pi. (#1696)
+- Physical Escape key records on native Windows now bypass raw VT report framing, so pane applications receive Escape immediately and reliably. (#1736)
+
 ## [0.7.5] - 2026-07-21
 
 ### Breaking Changes
