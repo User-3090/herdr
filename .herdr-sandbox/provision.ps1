@@ -384,6 +384,66 @@ function Wait-HerdrVisualStudioInstalled {
     throw "Visual Studio C++ workload did not become ready within $TimeoutSeconds seconds."
 }
 
+function Test-HerdrVisualStudioFirewallRule {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$Rules,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Inbound', 'Outbound')]
+        [string]$Direction,
+        [Parameter(Mandatory = $true)]
+        [string]$Program
+    )
+
+    if ($Rules.Count -ne 1) { return $false }
+    $candidate = $Rules[0]
+    try {
+        $applicationFilters = @($candidate | Get-NetFirewallApplicationFilter -ErrorAction Stop)
+        if ($applicationFilters.Count -ne 1) { return $false }
+        $actualProgram = [IO.Path]::GetFullPath([string]$applicationFilters[0].Program)
+        $expectedProgram = [IO.Path]::GetFullPath($Program)
+    } catch {
+        return $false
+    }
+    return [string]$candidate.Name -ceq $Name -and
+        [string]$candidate.DisplayName -ceq $Name -and
+        [string]$candidate.Enabled -ceq 'True' -and
+        [string]$candidate.Direction -ceq $Direction -and
+        [string]$candidate.Action -ceq 'Block' -and
+        [string]::Equals($actualProgram, $expectedProgram, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Set-HerdrVisualStudioFirewallRule {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Inbound', 'Outbound')]
+        [string]$Direction,
+        [Parameter(Mandatory = $true)]
+        [string]$Program
+    )
+
+    $existing = @(Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue)
+    if (Test-HerdrVisualStudioFirewallRule -Rules $existing -Name $Name `
+            -Direction $Direction -Program $Program) {
+        return
+    }
+    if ($existing.Count -gt 0) {
+        $existing | Remove-NetFirewallRule -ErrorAction Stop
+    }
+    New-NetFirewallRule -Name $Name -DisplayName $Name -Enabled True `
+        -Direction $Direction -Program $Program -Action Block | Out-Null
+    $verified = @(Get-NetFirewallRule -Name $Name -ErrorAction Stop)
+    if (-not (Test-HerdrVisualStudioFirewallRule -Rules $verified -Name $Name `
+                -Direction $Direction -Program $Program)) {
+        throw "Visual Studio firewall rule verification failed: $Name"
+    }
+}
+
 function Install-HerdrVisualStudioBuildTools {
     $visualStudioStopwatch = [Diagnostics.Stopwatch]::StartNew()
     $cacheRoot = 'C:\HerdrSandbox\cache\vsbt'
@@ -437,8 +497,8 @@ function Install-HerdrVisualStudioBuildTools {
             @{ Name = 'HerdrSandbox-VSInstaller-In'; Direction = 'Inbound'; Program = $installerEngine },
             @{ Name = 'HerdrSandbox-VSInstaller-Out'; Direction = 'Outbound'; Program = $installerEngine }
         )) {
-            New-NetFirewallRule -Name $rule.Name -DisplayName $rule.Name -Enabled True `
-                -Direction $rule.Direction -Program $rule.Program -Action Block | Out-Null
+            Set-HerdrVisualStudioFirewallRule -Name $rule.Name -Direction $rule.Direction `
+                -Program $rule.Program
         }
         Invoke-HerdrVisualStudioInstaller -FilePath $guestLayoutBootstrapper -ArgumentList $installationArguments
         Wait-HerdrVisualStudioInstalled
